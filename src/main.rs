@@ -63,18 +63,28 @@ async fn main() -> Result<()> {
     let (arb_tx, mut arb_rx) = watch::channel(());
 
     // ── Sync event subscription task (with reconnect loop) ────────────────────
-    let provider_sub = provider.clone();
+    let ws_url_sub = ws_url.clone();
     let registry_sub = registry.clone();
     let arb_tx_sub = arb_tx.clone();
     tokio::spawn(async move {
         let mut backoff = Duration::from_secs(1);
         loop {
-            match run_subscriptions(provider_sub.clone(), registry_sub.clone(), arb_tx_sub.clone()).await {
-                Ok(_) => break,
+            match Provider::<Ws>::connect(&ws_url_sub).await {
                 Err(e) => {
-                    error!("subscription error: {e:#}; reconnecting in {}s", backoff.as_secs());
+                    error!("WebSocket reconnect failed: {e:#}; retrying in {}s", backoff.as_secs());
                     tokio::time::sleep(backoff).await;
                     backoff = (backoff * 2).min(Duration::from_secs(60));
+                }
+                Ok(fresh_provider) => {
+                    let fresh_provider = Arc::new(fresh_provider);
+                    match run_subscriptions(fresh_provider, registry_sub.clone(), arb_tx_sub.clone()).await {
+                        Ok(_) => break,
+                        Err(e) => {
+                            error!("subscription error: {e:#}; reconnecting in {}s", backoff.as_secs());
+                            tokio::time::sleep(backoff).await;
+                            backoff = (backoff * 2).min(Duration::from_secs(60));
+                        }
+                    }
                 }
             }
         }
