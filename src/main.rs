@@ -1,5 +1,6 @@
 mod arb;
 mod config;
+mod cross_chain;
 mod dex;
 mod pools;
 mod types;
@@ -16,6 +17,7 @@ use tracing::{error, info, warn};
 use tracing_subscriber::EnvFilter;
 
 use arb::{scan_all_opportunities, u256_to_f64};
+use cross_chain::{cross_chain_monitor, PriceRef};
 use pools::{bootstrap_reserves, refresh_stale_pools, run_subscriptions, verify_pool_tokens};
 use types::{ChainId, PoolKey, PoolState, SessionStats};
 
@@ -45,11 +47,22 @@ async fn main() -> Result<()> {
     let stats: Arc<RwLock<SessionStats>> = Arc::new(RwLock::new(SessionStats::default()));
     let start_time = Instant::now();
 
+    let threshold_pct = std::env::var("CROSS_CHAIN_THRESHOLD_PCT")
+        .ok()
+        .and_then(|s| s.parse::<f64>().ok())
+        .unwrap_or(0.1);
+
+    let mut price_refs: Vec<(ChainId, PriceRef)> = Vec::new();
+
     for (chain, ws_url) in chains {
-        spawn_chain_tasks(chain, ws_url, stats.clone())
+        let price_ref: PriceRef = Arc::new(RwLock::new(None));
+        price_refs.push((chain, price_ref.clone()));
+        spawn_chain_tasks(chain, ws_url, stats.clone(), price_ref)
             .await
             .wrap_err_with(|| format!("failed to start {} scanner", chain.name()))?;
     }
+
+    tokio::spawn(cross_chain_monitor(price_refs, threshold_pct));
 
     tokio::signal::ctrl_c()
         .await
@@ -110,6 +123,7 @@ async fn spawn_chain_tasks(
     chain: ChainId,
     ws_url: String,
     stats: Arc<RwLock<SessionStats>>,
+    weth_usd_price: PriceRef,
 ) -> Result<()> {
     let provider = Arc::new(
         Provider::<Ws>::connect(&ws_url)
@@ -183,6 +197,7 @@ async fn spawn_chain_tasks(
         let gas_price_blocks = gas_price.clone();
         let registry_blocks = registry.clone();
         let stats_blocks = stats.clone();
+        let weth_usd_price_blocks = weth_usd_price.clone();
         tokio::spawn(async move {
             match provider_blocks.subscribe_blocks().await {
                 Err(e) => error!(chain = chain.name(), "subscribe_blocks failed: {e}"),
@@ -214,6 +229,10 @@ async fn spawn_chain_tasks(
 
                         let snap = registry_blocks.snapshot().await;
                         let price_line = build_chain_price_line(chain, &snap);
+
+                        if let Some(p) = chain_weth_usd_price(chain, &snap) {
+                            *weth_usd_price_blocks.write().await = Some(p);
+                        }
 
                         info!(
                             chain = chain.name(),
