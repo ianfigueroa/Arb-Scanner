@@ -54,10 +54,22 @@ fn v3_dispatch(
     token_out: Address,
     amount_in: U256,
 ) -> Option<U256> {
-    // Full V3 dispatch requires token0/token1 stored in PoolState::V3
-    // and tick-level liquidity for accurate price impact — added in Phase 4.
-    let _ = (state, token_in, token_out, amount_in);
-    None
+    let (sqrt_price_x96, fee_tier, token0, token1) = match state {
+        PoolState::V3 { sqrt_price_x96, fee_tier, token0, token1, .. } => {
+            (*sqrt_price_x96, *fee_tier, *token0, *token1)
+        }
+        _ => return None,
+    };
+    // zero_for_one=false: token0→token1 (multiply by price)
+    // zero_for_one=true:  token1→token0 (divide by price)
+    let zero_for_one = if token_in == token0 && token_out == token1 {
+        false
+    } else if token_in == token1 && token_out == token0 {
+        true
+    } else {
+        return None;
+    };
+    v3::approx_out_v3(amount_in, sqrt_price_x96, fee_tier, zero_for_one)
 }
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
@@ -105,7 +117,13 @@ mod tests {
 
     #[test]
     fn test_quote_v2_wrong_state_type() {
-        let state = PoolState::V3 { sqrt_price_x96: U256::from(1u64), fee_tier: 500, last_block: 100 };
+        let state = PoolState::V3 {
+            sqrt_price_x96: U256::from(1u64),
+            fee_tier: 500,
+            token0: test_addr(1),
+            token1: test_addr(2),
+            last_block: 100,
+        };
         let out = quote(DexType::UniswapV2, &state, test_addr(1), test_addr(2), U256::from(100u64));
         assert!(out.is_none());
     }
@@ -118,9 +136,38 @@ mod tests {
     }
 
     #[test]
-    fn test_quote_v3_returns_none_pending_phase4() {
-        let state = PoolState::V3 { sqrt_price_x96: U256::from(1u64), fee_tier: 500, last_block: 100 };
+    fn test_quote_v3_dispatch_works() {
+        // price=4 (sqrtPrice=2), token0=addr(1), token1=addr(2)
+        // token_in=addr(1)=token0 → zero_for_one=false (token0→token1, multiply by price)
+        // out = 100 * 4 * (999500/1000000) = 399
+        let state = PoolState::V3 {
+            sqrt_price_x96: U256::from(2u64) * (U256::one() << 96u32),
+            fee_tier: 500,
+            token0: test_addr(1),
+            token1: test_addr(2),
+            last_block: 100,
+        };
         let out = quote(DexType::UniswapV3, &state, test_addr(1), test_addr(2), U256::from(100u64));
+        assert_eq!(out, Some(U256::from(399u64)));
+    }
+
+    #[test]
+    fn test_quote_v3_wrong_state_type() {
+        let state = make_v2_state(1000, 2000, 1, 2);
+        let out = quote(DexType::UniswapV3, &state, test_addr(1), test_addr(2), U256::from(100u64));
+        assert!(out.is_none());
+    }
+
+    #[test]
+    fn test_quote_v3_wrong_tokens() {
+        let state = PoolState::V3 {
+            sqrt_price_x96: U256::from(2u64) * (U256::one() << 96u32),
+            fee_tier: 500,
+            token0: test_addr(1),
+            token1: test_addr(2),
+            last_block: 100,
+        };
+        let out = quote(DexType::UniswapV3, &state, test_addr(3), test_addr(1), U256::from(100u64));
         assert!(out.is_none());
     }
 

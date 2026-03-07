@@ -51,6 +51,8 @@ pub enum PoolState {
     V3 {
         sqrt_price_x96: U256,
         fee_tier: u32,
+        token0: Address,
+        token1: Address,
         last_block: u64,
     },
     Curve {

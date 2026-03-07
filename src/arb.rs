@@ -330,6 +330,8 @@ mod tests {
         let state = PoolState::V3 {
             sqrt_price_x96: U256::zero(),
             fee_tier: 500,
+            token0: test_addr(1),
+            token1: test_addr(2),
             last_block: 99,
         };
         assert_eq!(state.last_block(), 99);

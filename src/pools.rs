@@ -4,13 +4,13 @@ use std::sync::Arc;
 use ethers::abi::Abi;
 use ethers::contract::Contract;
 use ethers::providers::{Middleware, Provider, StreamExt, Ws};
-use ethers::types::{Address, Filter, Log, U256};
+use ethers::types::{Address, Filter, Log, H256, U256};
 use eyre::{eyre, Result, WrapErr};
 use tokio::sync::RwLock;
 use tracing::{error, info, warn};
 
 use crate::config::{pool_catalog, PoolCatalogEntry};
-use crate::types::{ChainId, PoolKey, PoolState};
+use crate::types::{ChainId, DexType, PoolKey, PoolState};
 
 // ─── ABI fragment ─────────────────────────────────────────────────────────────
 
@@ -23,6 +23,14 @@ const PAIR_ABI: &str = r#"[
 
 fn parse_abi() -> Abi {
     serde_json::from_str(PAIR_ABI).expect("hardcoded ABI is valid JSON")
+}
+
+const SLOT0_ABI: &str = r#"[
+    {"inputs":[],"name":"slot0","outputs":[{"internalType":"uint160","name":"sqrtPriceX96","type":"uint160"},{"internalType":"int24","name":"tick","type":"int24"},{"internalType":"uint16","name":"observationIndex","type":"uint16"},{"internalType":"uint16","name":"observationCardinality","type":"uint16"},{"internalType":"uint16","name":"observationCardinalityNext","type":"uint16"},{"internalType":"uint8","name":"feeProtocol","type":"uint8"},{"internalType":"bool","name":"unlocked","type":"bool"}],"stateMutability":"view","type":"function"}
+]"#;
+
+fn parse_slot0_abi() -> Abi {
+    serde_json::from_str(SLOT0_ABI).expect("hardcoded slot0 ABI is valid JSON")
 }
 
 // ─── PoolRegistry ─────────────────────────────────────────────────────────────
@@ -119,30 +127,59 @@ pub async fn bootstrap_reserves(
     let registry = PoolRegistry::new();
 
     for cfg in &configs {
-        let (reserve0, reserve1) = fetch_reserves(&abi, provider.clone(), cfg.pool_key.address)
-            .await
-            .wrap_err_with(|| format!("bootstrap getReserves failed for {}", cfg.name))?;
-
-        info!(
-            pool = cfg.name,
-            reserve0 = %reserve0,
-            reserve1 = %reserve1,
-            block = current_block,
-            "bootstrapped reserves"
-        );
-
-        registry
-            .update(
-                cfg.pool_key,
-                PoolState::V2 {
-                    reserve0,
-                    reserve1,
-                    token0: cfg.expected_token0,
-                    token1: cfg.expected_token1,
-                    last_block: current_block,
-                },
-            )
-            .await;
+        match cfg.dex_type {
+            DexType::UniswapV2 => {
+                let (reserve0, reserve1) =
+                    fetch_reserves(&abi, provider.clone(), cfg.pool_key.address)
+                        .await
+                        .wrap_err_with(|| {
+                            format!("bootstrap getReserves failed for {}", cfg.name)
+                        })?;
+                info!(
+                    pool = cfg.name,
+                    reserve0 = %reserve0,
+                    reserve1 = %reserve1,
+                    block = current_block,
+                    "bootstrapped reserves"
+                );
+                registry
+                    .update(
+                        cfg.pool_key,
+                        PoolState::V2 {
+                            reserve0,
+                            reserve1,
+                            token0: cfg.expected_token0,
+                            token1: cfg.expected_token1,
+                            last_block: current_block,
+                        },
+                    )
+                    .await;
+            }
+            DexType::UniswapV3 => {
+                let sqrt_price_x96 = fetch_slot0(provider.clone(), cfg.pool_key.address)
+                    .await
+                    .wrap_err_with(|| format!("bootstrap slot0 failed for {}", cfg.name))?;
+                info!(
+                    pool = cfg.name,
+                    sqrt_price_x96 = %sqrt_price_x96,
+                    block = current_block,
+                    "bootstrapped slot0"
+                );
+                registry
+                    .update(
+                        cfg.pool_key,
+                        PoolState::V3 {
+                            sqrt_price_x96,
+                            fee_tier: cfg.fee_tier,
+                            token0: cfg.expected_token0,
+                            token1: cfg.expected_token1,
+                            last_block: current_block,
+                        },
+                    )
+                    .await;
+            }
+            DexType::CurveStableswap => {} // Phase 5
+        }
     }
 
     Ok(registry)
@@ -162,6 +199,17 @@ async fn fetch_reserves(
     Ok((U256::from(r0), U256::from(r1)))
 }
 
+async fn fetch_slot0(provider: Arc<Provider<Ws>>, address: Address) -> Result<U256> {
+    let abi = parse_slot0_abi();
+    let contract = Contract::new(address, abi, provider);
+    let (sqrt_price_x96, _, _, _, _, _, _): (U256, i32, u16, u16, u16, u8, bool) = contract
+        .method::<_, (U256, i32, u16, u16, u16, u8, bool)>("slot0", ())?
+        .call()
+        .await
+        .wrap_err("slot0()")?;
+    Ok(sqrt_price_x96)
+}
+
 // ─── Sync event subscriptions ─────────────────────────────────────────────────
 
 /// Subscribes to Sync events for all V2 pools on the given chain.
@@ -174,25 +222,38 @@ pub async fn run_subscriptions(
 ) -> Result<()> {
     let configs = pool_catalog(chain);
     let pair_addresses: Vec<Address> = configs.iter().map(|c| c.pool_key.address).collect();
-    let sync_topic = ethers::core::utils::keccak256("Sync(uint112,uint112)");
+    let sync_topic = H256::from(ethers::core::utils::keccak256("Sync(uint112,uint112)"));
+    let swap_topic = H256::from(ethers::core::utils::keccak256(
+        "Swap(address,address,int256,int256,uint160,uint128,int24)",
+    ));
 
-    let filter = Filter::new()
-        .address(pair_addresses)
-        .topic0(ethers::types::H256::from(sync_topic));
+    let filter = Filter::new().address(pair_addresses);
 
     let mut stream = provider
         .subscribe_logs(&filter)
         .await
         .wrap_err("subscribe_logs")?;
 
-    info!(chain = chain.name(), "subscribed to Sync events");
+    info!(chain = chain.name(), "subscribed to pool events");
 
     while let Some(log) = stream.next().await {
-        handle_sync_log(log, &registry, chain).await;
-        let _ = arb_tx.send(());
+        let handled = match log.topics.first().copied() {
+            Some(t) if t == sync_topic => {
+                handle_sync_log(log, &registry, chain).await;
+                true
+            }
+            Some(t) if t == swap_topic => {
+                handle_swap_log(log, &registry, chain).await;
+                true
+            }
+            _ => false,
+        };
+        if handled {
+            let _ = arb_tx.send(());
+        }
     }
 
-    Err(eyre!("Sync log stream ended unexpectedly"))
+    Err(eyre!("pool log stream ended unexpectedly"))
 }
 
 async fn handle_sync_log(log: Log, registry: &PoolRegistry, chain: ChainId) {
@@ -235,6 +296,43 @@ async fn handle_sync_log(log: Log, registry: &PoolRegistry, chain: ChainId) {
         .await;
 }
 
+async fn handle_swap_log(log: Log, registry: &PoolRegistry, chain: ChainId) {
+    let address = log.address;
+    let block_number = match log.block_number {
+        Some(b) => b.as_u64(),
+        None => {
+            warn!("Swap log missing block_number, skipping");
+            return;
+        }
+    };
+
+    let entry = pool_catalog(chain).into_iter().find(|c| c.pool_key.address == address);
+    let Some(entry) = entry else {
+        warn!(?address, "received Swap from unknown address");
+        return;
+    };
+
+    // Swap data: amount0(32), amount1(32), sqrtPriceX96(32), liquidity(32), tick(32)
+    if log.data.len() < 96 {
+        warn!(pool = entry.name, "Swap log data too short");
+        return;
+    }
+    let sqrt_price_x96 = U256::from_big_endian(&log.data[64..96]);
+
+    registry
+        .update(
+            entry.pool_key,
+            PoolState::V3 {
+                sqrt_price_x96,
+                fee_tier: entry.fee_tier,
+                token0: entry.expected_token0,
+                token1: entry.expected_token1,
+                last_block: block_number,
+            },
+        )
+        .await;
+}
+
 // ─── Stale reserve refresh ────────────────────────────────────────────────────
 
 const STALE_BLOCK_THRESHOLD: u64 = 50;
@@ -258,27 +356,47 @@ pub async fn refresh_stale_pools(
             .unwrap_or(true);
 
         if stale {
-            warn!(
-                pool = cfg.name,
-                current_block,
-                "pool is stale, refreshing via getReserves()"
-            );
-            match fetch_reserves(&abi, provider.clone(), cfg.pool_key.address).await {
-                Ok((r0, r1)) => {
-                    registry
-                        .update(
-                            cfg.pool_key,
-                            PoolState::V2 {
-                                reserve0: r0,
-                                reserve1: r1,
-                                token0: cfg.expected_token0,
-                                token1: cfg.expected_token1,
-                                last_block: current_block,
-                            },
-                        )
-                        .await;
+            warn!(pool = cfg.name, current_block, "pool is stale, refreshing");
+            match cfg.dex_type {
+                DexType::UniswapV2 => {
+                    match fetch_reserves(&abi, provider.clone(), cfg.pool_key.address).await {
+                        Ok((r0, r1)) => {
+                            registry
+                                .update(
+                                    cfg.pool_key,
+                                    PoolState::V2 {
+                                        reserve0: r0,
+                                        reserve1: r1,
+                                        token0: cfg.expected_token0,
+                                        token1: cfg.expected_token1,
+                                        last_block: current_block,
+                                    },
+                                )
+                                .await;
+                        }
+                        Err(e) => error!(pool = cfg.name, "refresh failed: {e}"),
+                    }
                 }
-                Err(e) => error!(pool = cfg.name, "refresh failed: {e}"),
+                DexType::UniswapV3 => {
+                    match fetch_slot0(provider.clone(), cfg.pool_key.address).await {
+                        Ok(sqrt_price_x96) => {
+                            registry
+                                .update(
+                                    cfg.pool_key,
+                                    PoolState::V3 {
+                                        sqrt_price_x96,
+                                        fee_tier: cfg.fee_tier,
+                                        token0: cfg.expected_token0,
+                                        token1: cfg.expected_token1,
+                                        last_block: current_block,
+                                    },
+                                )
+                                .await;
+                        }
+                        Err(e) => error!(pool = cfg.name, "slot0 refresh failed: {e}"),
+                    }
+                }
+                DexType::CurveStableswap => {} // Phase 5
             }
         }
     }

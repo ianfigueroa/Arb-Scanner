@@ -59,6 +59,7 @@ pub fn arbitrum_pools() -> Vec<PoolCatalogEntry> {
             token0_symbol: "WETH",
             token1_symbol: "USDC.e",
             name: "WETH/USDC.e SushiV2",
+            fee_tier: 0,
         },
         PoolCatalogEntry {
             pool_key: pool_key_weth_usdt(),
@@ -68,6 +69,7 @@ pub fn arbitrum_pools() -> Vec<PoolCatalogEntry> {
             token0_symbol: "WETH",
             token1_symbol: "USDT",
             name: "WETH/USDT SushiV2",
+            fee_tier: 0,
         },
         PoolCatalogEntry {
             pool_key: pool_key_usdt_usdc_e(),
@@ -77,6 +79,7 @@ pub fn arbitrum_pools() -> Vec<PoolCatalogEntry> {
             token0_symbol: "USDT",
             token1_symbol: "USDC.e",
             name: "USDT/USDC.e SushiV2",
+            fee_tier: 0,
         },
     ]
 }

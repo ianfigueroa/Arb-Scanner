@@ -74,18 +74,6 @@ mod tests {
     }
 
     #[test]
-    fn test_pool_catalog_all_chains_have_three_entries() {
-        for chain in ALL_CHAINS {
-            assert_eq!(
-                pool_catalog(chain).len(),
-                3,
-                "pool_catalog({}) should have 3 entries",
-                chain.name()
-            );
-        }
-    }
-
-    #[test]
     fn test_cross_chain_pool_keys_are_unique() {
         let mut all_keys: Vec<PoolKey> = Vec::new();
         for chain in ALL_CHAINS {

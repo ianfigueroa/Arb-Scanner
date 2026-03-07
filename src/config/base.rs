@@ -61,6 +61,7 @@ pub fn base_pools() -> Vec<PoolCatalogEntry> {
             token0_symbol: "WETH",
             token1_symbol: "USDC",
             name: "WETH/USDC BaseSwap",
+            fee_tier: 0,
         },
         PoolCatalogEntry {
             pool_key: pool_key_weth_dai(),
@@ -70,6 +71,7 @@ pub fn base_pools() -> Vec<PoolCatalogEntry> {
             token0_symbol: "WETH",
             token1_symbol: "DAI",
             name: "WETH/DAI BaseSwap",
+            fee_tier: 0,
         },
         PoolCatalogEntry {
             pool_key: pool_key_dai_usdc(),
@@ -79,6 +81,7 @@ pub fn base_pools() -> Vec<PoolCatalogEntry> {
             token0_symbol: "DAI",
             token1_symbol: "USDC",
             name: "DAI/USDC BaseSwap",
+            fee_tier: 0,
         },
     ]
 }
