@@ -1,31 +1,17 @@
 use std::collections::HashMap;
 
-use ethers::types::{Address, U256};
+use ethers::types::U256;
 use tracing::warn;
 
-use crate::types::{ArbOpportunity, ArbPath, ChainId, DexType, PoolKey, PoolState};
+use crate::dex;
+pub use crate::dex::v2::amm_out;
+use crate::types::{ArbOpportunity, ArbPath, ChainId, PoolKey, PoolState};
 
 /// Maximum block difference across pools in a path before skipping arb calculation.
 pub const MAX_BLOCK_SKEW: u64 = 3;
 
 /// Gas units estimated for a 3-hop triangular arb.
 const GAS_UNITS: u64 = 150_000;
-
-// ─── AMM formula ──────────────────────────────────────────────────────────────
-
-/// Uniswap V2 constant-product output with 0.3% fee.
-/// Uses raw token units — no decimal normalization needed across hops.
-pub fn amm_out(amount_in: U256, reserve_in: U256, reserve_out: U256) -> Option<U256> {
-    if reserve_in.is_zero() || reserve_out.is_zero() || amount_in.is_zero() {
-        return None;
-    }
-    let amount_in_with_fee = amount_in.checked_mul(U256::from(997))?;
-    let numerator = amount_in_with_fee.checked_mul(reserve_out)?;
-    let denominator = reserve_in
-        .checked_mul(U256::from(1000))?
-        .checked_add(amount_in_with_fee)?;
-    numerator.checked_div(denominator)
-}
 
 // ─── Freshness guard ──────────────────────────────────────────────────────────
 
@@ -57,32 +43,6 @@ fn path_is_fresh(pools: &HashMap<PoolKey, PoolState>, path: &ArbPath) -> bool {
     true
 }
 
-// ─── Single-hop V2 quote ──────────────────────────────────────────────────────
-
-/// Compute amm_out for a V2 hop given token_in/token_out direction.
-/// Returns None if the state is not V2 or the token pair doesn't match the pool.
-fn v2_hop(
-    state: &PoolState,
-    token_in: Address,
-    token_out: Address,
-    amount_in: U256,
-) -> Option<U256> {
-    let (reserve0, reserve1, token0, token1) = match state {
-        PoolState::V2 { reserve0, reserve1, token0, token1, .. } => {
-            (reserve0, reserve1, token0, token1)
-        }
-        _ => return None,
-    };
-
-    if token_in == *token0 && token_out == *token1 {
-        amm_out(amount_in, *reserve0, *reserve1)
-    } else if token_in == *token1 && token_out == *token0 {
-        amm_out(amount_in, *reserve1, *reserve0)
-    } else {
-        None
-    }
-}
-
 // ─── Path execution ───────────────────────────────────────────────────────────
 
 /// Execute an arb path hop-by-hop. Returns the output amount after all hops,
@@ -98,11 +58,7 @@ pub(crate) fn execute_path(
     let mut amount = amount_in;
     for hop in &path.hops {
         let state = pools.get(&hop.pool_key)?;
-        amount = match hop.dex_type {
-            DexType::UniswapV2 => v2_hop(state, hop.token_in, hop.token_out, amount)?,
-            // V3 and Curve handled in later phases
-            _ => return None,
-        };
+        amount = dex::quote(hop.dex_type, state, hop.token_in, hop.token_out, amount)?;
     }
     Some(amount)
 }
@@ -193,7 +149,8 @@ pub fn u256_to_f64(v: U256) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::HopSpec;
+    use ethers::types::Address;
+    use crate::types::{DexType, HopSpec};
 
     // ── Test fixtures ─────────────────────────────────────────────────────────
 

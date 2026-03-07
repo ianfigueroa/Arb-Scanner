@@ -1,5 +1,6 @@
 mod arb;
 mod config;
+mod dex;
 mod pools;
 mod types;
 
