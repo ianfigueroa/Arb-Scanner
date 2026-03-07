@@ -141,7 +141,6 @@ pub fn apply_gas(
     ArbOpportunity {
         path,
         input_weth,
-        gross_weth,
         estimated_net_after_gas,
         roi_pct,
         gas_cost_usd,

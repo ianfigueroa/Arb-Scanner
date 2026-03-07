@@ -8,10 +8,6 @@ pub enum PoolId {
 }
 
 impl PoolId {
-    pub fn all() -> [PoolId; 3] {
-        [PoolId::WethUsdc, PoolId::UsdcDai, PoolId::DaiWeth]
-    }
-
     pub fn name(&self) -> &'static str {
         match self {
             PoolId::WethUsdc => "WETH/USDC",
@@ -19,13 +15,6 @@ impl PoolId {
             PoolId::DaiWeth => "DAI/WETH",
         }
     }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Token {
-    Weth,
-    Usdc,
-    Dai,
 }
 
 #[derive(Debug, Clone)]
@@ -40,7 +29,6 @@ pub struct ArbOpportunity {
     /// "WETH→USDC→DAI→WETH" or "WETH→DAI→USDC→WETH"
     pub path: &'static str,
     pub input_weth: U256,
-    pub gross_weth: U256,
     /// After subtracting estimated gas cost; may be negative (stored as i128 in wei)
     pub estimated_net_after_gas: i128,
     pub roi_pct: f64,
