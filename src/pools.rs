@@ -33,6 +33,14 @@ fn parse_slot0_abi() -> Abi {
     serde_json::from_str(SLOT0_ABI).expect("hardcoded slot0 ABI is valid JSON")
 }
 
+const CURVE_BALANCES_ABI: &str = r#"[
+    {"inputs":[{"internalType":"uint256","name":"i","type":"uint256"}],"name":"balances","outputs":[{"internalType":"uint256","name":"","type":"uint256"}],"stateMutability":"view","type":"function"}
+]"#;
+
+fn parse_curve_balances_abi() -> Abi {
+    serde_json::from_str(CURVE_BALANCES_ABI).expect("hardcoded Curve balances ABI is valid JSON")
+}
+
 // ─── PoolRegistry ─────────────────────────────────────────────────────────────
 
 #[derive(Clone)]
@@ -67,6 +75,12 @@ pub async fn verify_pool_tokens(provider: Arc<Provider<Ws>>, chain: ChainId) -> 
     let configs = pool_catalog(chain);
 
     for cfg in &configs {
+        if cfg.dex_type == DexType::CurveStableswap {
+            // Curve pools use coins(i) not token0/token1; skip on-chain verification
+            info!(pool = cfg.name, "skipping token verification for Curve pool");
+            continue;
+        }
+
         let contract = Contract::new(cfg.pool_key.address, abi.clone(), provider.clone());
 
         let token0: Address = contract
@@ -178,7 +192,26 @@ pub async fn bootstrap_reserves(
                     )
                     .await;
             }
-            DexType::CurveStableswap => {} // Phase 5
+            DexType::CurveStableswap => {
+                let n = usize::from(cfg.n_coins);
+                let mut balances = Vec::with_capacity(n);
+                for i in 0..n {
+                    let b = fetch_curve_balance(provider.clone(), cfg.pool_key.address, i as u64)
+                        .await
+                        .wrap_err_with(|| {
+                            format!("bootstrap balances({i}) failed for {}", cfg.name)
+                        })?;
+                    balances.push(b);
+                }
+                info!(
+                    pool = cfg.name,
+                    block = current_block,
+                    "bootstrapped curve balances"
+                );
+                registry
+                    .update(cfg.pool_key, PoolState::Curve { balances, last_block: current_block })
+                    .await;
+            }
         }
     }
 
@@ -210,6 +243,16 @@ async fn fetch_slot0(provider: Arc<Provider<Ws>>, address: Address) -> Result<U2
     Ok(sqrt_price_x96)
 }
 
+async fn fetch_curve_balance(provider: Arc<Provider<Ws>>, address: Address, i: u64) -> Result<U256> {
+    let abi = parse_curve_balances_abi();
+    let contract = Contract::new(address, abi, provider);
+    contract
+        .method::<_, U256>("balances", U256::from(i))?
+        .call()
+        .await
+        .wrap_err("balances()")
+}
+
 // ─── Sync event subscriptions ─────────────────────────────────────────────────
 
 /// Subscribes to Sync events for all V2 pools on the given chain.
@@ -225,6 +268,9 @@ pub async fn run_subscriptions(
     let sync_topic = H256::from(ethers::core::utils::keccak256("Sync(uint112,uint112)"));
     let swap_topic = H256::from(ethers::core::utils::keccak256(
         "Swap(address,address,int256,int256,uint160,uint128,int24)",
+    ));
+    let token_exchange_topic = H256::from(ethers::core::utils::keccak256(
+        "TokenExchange(address,int128,uint256,int128,uint256)",
     ));
 
     let filter = Filter::new().address(pair_addresses);
@@ -244,6 +290,10 @@ pub async fn run_subscriptions(
             }
             Some(t) if t == swap_topic => {
                 handle_swap_log(log, &registry, chain).await;
+                true
+            }
+            Some(t) if t == token_exchange_topic => {
+                handle_token_exchange_log(log, &registry, chain).await;
                 true
             }
             _ => false,
@@ -333,6 +383,48 @@ async fn handle_swap_log(log: Log, registry: &PoolRegistry, chain: ChainId) {
         .await;
 }
 
+async fn handle_token_exchange_log(log: Log, registry: &PoolRegistry, chain: ChainId) {
+    let address = log.address;
+    let block_number = match log.block_number {
+        Some(b) => b.as_u64(),
+        None => {
+            warn!("TokenExchange log missing block_number, skipping");
+            return;
+        }
+    };
+
+    let entry = pool_catalog(chain).into_iter().find(|c| c.pool_key.address == address);
+    let Some(entry) = entry else {
+        warn!(?address, "received TokenExchange from unknown address");
+        return;
+    };
+
+    // data: sold_id(32), tokens_sold(32), bought_id(32), tokens_bought(32)
+    if log.data.len() < 128 {
+        warn!(pool = entry.name, "TokenExchange log data too short");
+        return;
+    }
+    let sold_id = log.data[31] as usize;
+    let tokens_sold = U256::from_big_endian(&log.data[32..64]);
+    let bought_id = log.data[95] as usize;
+    let tokens_bought = U256::from_big_endian(&log.data[96..128]);
+
+    let current_state = registry.get(entry.pool_key).await;
+    if let Some(PoolState::Curve { balances, .. }) = current_state {
+        let n = balances.len();
+        if sold_id >= n || bought_id >= n {
+            warn!(pool = entry.name, sold_id, bought_id, n, "coin index out of range");
+            return;
+        }
+        let mut new_balances = balances.clone();
+        new_balances[sold_id] = new_balances[sold_id].saturating_add(tokens_sold);
+        new_balances[bought_id] = new_balances[bought_id].saturating_sub(tokens_bought);
+        registry
+            .update(entry.pool_key, PoolState::Curve { balances: new_balances, last_block: block_number })
+            .await;
+    }
+}
+
 // ─── Stale reserve refresh ────────────────────────────────────────────────────
 
 const STALE_BLOCK_THRESHOLD: u64 = 50;
@@ -396,7 +488,35 @@ pub async fn refresh_stale_pools(
                         Err(e) => error!(pool = cfg.name, "slot0 refresh failed: {e}"),
                     }
                 }
-                DexType::CurveStableswap => {} // Phase 5
+                DexType::CurveStableswap => {
+                    let n = usize::from(cfg.n_coins);
+                    let mut balances = Vec::with_capacity(n);
+                    let mut ok = true;
+                    for i in 0..n {
+                        match fetch_curve_balance(
+                            provider.clone(),
+                            cfg.pool_key.address,
+                            i as u64,
+                        )
+                        .await
+                        {
+                            Ok(b) => balances.push(b),
+                            Err(e) => {
+                                error!(pool = cfg.name, "balances({i}) refresh failed: {e}");
+                                ok = false;
+                                break;
+                            }
+                        }
+                    }
+                    if ok {
+                        registry
+                            .update(
+                                cfg.pool_key,
+                                PoolState::Curve { balances, last_block: current_block },
+                            )
+                            .await;
+                    }
+                }
             }
         }
     }

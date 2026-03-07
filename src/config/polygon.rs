@@ -60,6 +60,7 @@ pub fn polygon_pools() -> Vec<PoolCatalogEntry> {
             token1_symbol: "WETH",
             name: "WETH/USDC QuickSwap",
             fee_tier: 0,
+            n_coins: 0,
         },
         PoolCatalogEntry {
             pool_key: pool_key_usdc_dai(),
@@ -70,6 +71,7 @@ pub fn polygon_pools() -> Vec<PoolCatalogEntry> {
             token1_symbol: "DAI",
             name: "USDC/DAI QuickSwap",
             fee_tier: 0,
+            n_coins: 0,
         },
         PoolCatalogEntry {
             pool_key: pool_key_weth_dai(),
@@ -80,6 +82,7 @@ pub fn polygon_pools() -> Vec<PoolCatalogEntry> {
             token1_symbol: "DAI",
             name: "WETH/DAI QuickSwap",
             fee_tier: 0,
+            n_coins: 0,
         },
     ]
 }
