@@ -14,8 +14,9 @@ use tracing::{error, info, warn};
 use tracing_subscriber::EnvFilter;
 
 use arb::{scan_all_opportunities, u256_to_f64};
+use config::ethereum::{pool_key_dai_weth, pool_key_usdc_dai, pool_key_weth_usdc};
 use pools::{bootstrap_reserves, refresh_stale_pools, run_subscriptions, verify_pool_tokens};
-use types::SessionStats;
+use types::{ChainId, PoolKey, PoolState, SessionStats};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -43,16 +44,19 @@ async fn main() -> Result<()> {
     info!("connected to Ethereum node");
 
     // ── Startup: verify token ordering on-chain ───────────────────────────────
-    verify_pool_tokens(provider.clone())
+    verify_pool_tokens(provider.clone(), ChainId::Ethereum)
         .await
-        .wrap_err("token0/token1 verification failed — check POOL_CONFIGS addresses")?;
+        .wrap_err("token0/token1 verification failed — check pool addresses")?;
     info!("all pool token orderings verified");
 
     // ── Startup: bootstrap reserves ───────────────────────────────────────────
-    let registry = bootstrap_reserves(provider.clone())
+    let registry = bootstrap_reserves(provider.clone(), ChainId::Ethereum)
         .await
         .wrap_err("failed to bootstrap reserves")?;
     info!("reserves bootstrapped");
+
+    // ── Arb paths (computed once at startup) ──────────────────────────────────
+    let eth_paths = Arc::new(config::arb_paths(ChainId::Ethereum));
 
     // ── Shared state ──────────────────────────────────────────────────────────
     let gas_price: Arc<RwLock<Option<U256>>> = Arc::new(RwLock::new(None));
@@ -77,7 +81,14 @@ async fn main() -> Result<()> {
                 }
                 Ok(fresh_provider) => {
                     let fresh_provider = Arc::new(fresh_provider);
-                    match run_subscriptions(fresh_provider, registry_sub.clone(), arb_tx_sub.clone()).await {
+                    match run_subscriptions(
+                        fresh_provider,
+                        registry_sub.clone(),
+                        ChainId::Ethereum,
+                        arb_tx_sub.clone(),
+                    )
+                    .await
+                    {
                         Ok(_) => break,
                         Err(e) => {
                             error!("subscription error: {e:#}; reconnecting in {}s", backoff.as_secs());
@@ -118,7 +129,7 @@ async fn main() -> Result<()> {
                     };
 
                     // Refresh stale pools
-                    refresh_stale_pools(provider_blocks.clone(), &registry_blocks, block_num).await;
+                    refresh_stale_pools(provider_blocks.clone(), &registry_blocks, ChainId::Ethereum, block_num).await;
 
                     // Display prices from current reserves
                     let snap = registry_blocks.snapshot().await;
@@ -140,9 +151,9 @@ async fn main() -> Result<()> {
     let registry_arb = registry.clone();
     let gas_price_arb = gas_price.clone();
     let stats_arb = stats.clone();
+    let paths_arb = eth_paths.clone();
     tokio::spawn(async move {
         loop {
-            // Wait for a Sync event notification
             if arb_rx.changed().await.is_err() {
                 break;
             }
@@ -158,7 +169,7 @@ async fn main() -> Result<()> {
                 None => continue,
             };
 
-            let opps = scan_all_opportunities(&snap, gp, weth_price_usd);
+            let opps = scan_all_opportunities(&snap, &paths_arb, gp, weth_price_usd);
             let mut s = stats_arb.write().await;
 
             for opp in opps {
@@ -166,6 +177,7 @@ async fn main() -> Result<()> {
                     s.opps_found += 1;
 
                     info!(
+                        chain = opp.chain.name(),
                         path = opp.path,
                         input_eth = format!("{:.4}", u256_to_f64(opp.input_weth) / 1e18),
                         roi_pct = format!("{:.4}", opp.roi_pct),
@@ -202,6 +214,7 @@ async fn main() -> Result<()> {
         None => println!("Best opportunity:     none"),
         Some(opp) => {
             println!("Best opportunity:");
+            println!("  Chain:                {}", opp.chain.name());
             println!("  Path:                 {}", opp.path);
             println!("  Input:                {:.4} ETH", u256_to_f64(opp.input_weth) / 1e18);
             println!("  Estimated net (wei):  {}", opp.estimated_net_after_gas);
@@ -215,62 +228,91 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-// ─── Helpers ─────────────────────────────────────────────────────────────────
+// ─── Helpers ──────────────────────────────────────────────────────────────────
 
-fn weth_price_from_pools(
-    snap: &std::collections::HashMap<types::PoolId, types::PoolState>,
-) -> Option<f64> {
-    use types::PoolId;
-    let wu = snap.get(&PoolId::WethUsdc)?;
-    if wu.reserve1.is_zero() {
-        return None;
+fn weth_price_from_pools(snap: &std::collections::HashMap<PoolKey, PoolState>) -> Option<f64> {
+    let state = snap.get(&pool_key_weth_usdc())?;
+    if let PoolState::V2 { reserve0, reserve1, .. } = state {
+        if reserve1.is_zero() {
+            return None;
+        }
+        // token0=USDC (6 dec), token1=WETH (18 dec)
+        // price = (usdc_raw / 1e6) / (weth_raw / 1e18) = usdc_raw * 1e12 / weth_raw
+        let usdc_raw = u256_to_f64(*reserve0);
+        let weth_raw = u256_to_f64(*reserve1);
+        Some(usdc_raw * 1e12 / weth_raw)
+    } else {
+        None
     }
-    // token0=USDC (6 dec), token1=WETH (18 dec)
-    // price = (usdc_raw / 1e6) / (weth_raw / 1e18) = usdc_raw * 1e12 / weth_raw
-    let usdc_raw = u256_to_f64(wu.reserve0);
-    let weth_raw = u256_to_f64(wu.reserve1);
-    Some(usdc_raw * 1e12 / weth_raw)
 }
 
-fn build_price_line(
-    snap: &std::collections::HashMap<types::PoolId, types::PoolState>,
-) -> String {
-    use types::PoolId;
-
-    let weth_usdc = snap
-        .get(&PoolId::WethUsdc)
-        .map(|s| {
-            if s.reserve1.is_zero() {
-                return "WETH/USDC: N/A".to_string();
-            }
-            let price = u256_to_f64(s.reserve0) * 1e12 / u256_to_f64(s.reserve1);
-            format!("WETH/USDC: ${price:.2}")
-        })
-        .unwrap_or_else(|| "WETH/USDC: N/A".to_string());
+fn build_price_line(snap: &std::collections::HashMap<PoolKey, PoolState>) -> String {
+    let weth_usdc = format_pool_price(
+        snap.get(&pool_key_weth_usdc()),
+        "WETH/USDC",
+        // token0=USDC (6dec), token1=WETH (18dec) → price = r0 * 1e12 / r1
+        |r0, r1| if r1 == 0.0 { None } else { Some(r0 * 1e12 / r1) },
+        "$",
+        ".2",
+    );
 
     let usdc_dai = snap
-        .get(&PoolId::UsdcDai)
-        .map(|s| {
-            if s.reserve0.is_zero() {
-                return "USDC/DAI: N/A".to_string();
+        .get(&pool_key_usdc_dai())
+        .and_then(|s| {
+            if let PoolState::V2 { reserve0, reserve1, .. } = s {
+                if reserve0.is_zero() {
+                    return None;
+                }
+                // token0=DAI (18dec), token1=USDC (6dec)
+                let usdc_in_dai = u256_to_f64(*reserve0) / (u256_to_f64(*reserve1) * 1e12);
+                Some(format!("USDC/DAI: {usdc_in_dai:.4}"))
+            } else {
+                None
             }
-            // token0=DAI (18dec), token1=USDC (6dec)
-            let usdc_in_dai = u256_to_f64(s.reserve0) / (u256_to_f64(s.reserve1) * 1e12);
-            format!("USDC/DAI: {usdc_in_dai:.4}")
         })
         .unwrap_or_else(|| "USDC/DAI: N/A".to_string());
 
     let dai_weth = snap
-        .get(&PoolId::DaiWeth)
-        .map(|s| {
-            if s.reserve1.is_zero() {
-                return "DAI/WETH: N/A".to_string();
+        .get(&pool_key_dai_weth())
+        .and_then(|s| {
+            if let PoolState::V2 { reserve0, reserve1, .. } = s {
+                if reserve1.is_zero() {
+                    return None;
+                }
+                // token0=DAI (18dec), token1=WETH (18dec)
+                let price = u256_to_f64(*reserve0) / u256_to_f64(*reserve1);
+                Some(format!("DAI/WETH: {price:.2}"))
+            } else {
+                None
             }
-            // token0=DAI (18dec), token1=WETH (18dec)
-            let price = u256_to_f64(s.reserve0) / u256_to_f64(s.reserve1);
-            format!("DAI/WETH: {price:.2}")
         })
         .unwrap_or_else(|| "DAI/WETH: N/A".to_string());
 
     format!("{weth_usdc} | {usdc_dai} | {dai_weth}")
+}
+
+fn format_pool_price<F>(
+    state: Option<&PoolState>,
+    label: &str,
+    compute: F,
+    prefix: &str,
+    fmt: &str,
+) -> String
+where
+    F: Fn(f64, f64) -> Option<f64>,
+{
+    state
+        .and_then(|s| {
+            if let PoolState::V2 { reserve0, reserve1, .. } = s {
+                let price = compute(u256_to_f64(*reserve0), u256_to_f64(*reserve1))?;
+                Some(if fmt == ".2" {
+                    format!("{label}: {prefix}{price:.2}")
+                } else {
+                    format!("{label}: {prefix}{price:.4}")
+                })
+            } else {
+                None
+            }
+        })
+        .unwrap_or_else(|| format!("{label}: N/A"))
 }

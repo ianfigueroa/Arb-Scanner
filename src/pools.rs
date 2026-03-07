@@ -9,8 +9,8 @@ use eyre::{eyre, Result, WrapErr};
 use tokio::sync::RwLock;
 use tracing::{error, info, warn};
 
-use crate::config::{pool_configs, PoolConfig};
-use crate::types::{PoolId, PoolState};
+use crate::config::{pool_catalog, PoolCatalogEntry};
+use crate::types::{ChainId, PoolKey, PoolState};
 
 // ─── ABI fragment ─────────────────────────────────────────────────────────────
 
@@ -29,54 +29,54 @@ fn parse_abi() -> Abi {
 
 #[derive(Clone)]
 pub struct PoolRegistry {
-    inner: Arc<RwLock<HashMap<PoolId, PoolState>>>,
+    inner: Arc<RwLock<HashMap<PoolKey, PoolState>>>,
 }
 
 impl PoolRegistry {
-    fn new() -> Self {
+    pub fn new() -> Self {
         Self {
             inner: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 
-    pub async fn get(&self, id: PoolId) -> Option<PoolState> {
-        self.inner.read().await.get(&id).cloned()
+    pub async fn get(&self, key: PoolKey) -> Option<PoolState> {
+        self.inner.read().await.get(&key).cloned()
     }
 
-    pub async fn snapshot(&self) -> HashMap<PoolId, PoolState> {
+    pub async fn snapshot(&self) -> HashMap<PoolKey, PoolState> {
         self.inner.read().await.clone()
     }
 
-    pub async fn update(&self, id: PoolId, state: PoolState) {
-        self.inner.write().await.insert(id, state);
+    pub async fn update(&self, key: PoolKey, state: PoolState) {
+        self.inner.write().await.insert(key, state);
     }
 }
 
 // ─── Startup: verify token ordering on-chain ─────────────────────────────────
 
-pub async fn verify_pool_tokens(provider: Arc<Provider<Ws>>) -> Result<()> {
+pub async fn verify_pool_tokens(provider: Arc<Provider<Ws>>, chain: ChainId) -> Result<()> {
     let abi = parse_abi();
-    let configs = pool_configs();
+    let configs = pool_catalog(chain);
 
     for cfg in &configs {
-        let contract = Contract::new(cfg.pair_address, abi.clone(), provider.clone());
+        let contract = Contract::new(cfg.pool_key.address, abi.clone(), provider.clone());
 
         let token0: Address = contract
             .method::<_, Address>("token0", ())?
             .call()
             .await
-            .wrap_err_with(|| format!("token0() call failed for {}", cfg.pool_id.name()))?;
+            .wrap_err_with(|| format!("token0() call failed for {}", cfg.name))?;
 
         let token1: Address = contract
             .method::<_, Address>("token1", ())?
             .call()
             .await
-            .wrap_err_with(|| format!("token1() call failed for {}", cfg.pool_id.name()))?;
+            .wrap_err_with(|| format!("token1() call failed for {}", cfg.name))?;
 
         if token0 != cfg.expected_token0 {
             return Err(eyre!(
                 "Pool {} token0 mismatch: on-chain={:?} expected={:?}",
-                cfg.pool_id.name(),
+                cfg.name,
                 token0,
                 cfg.expected_token0
             ));
@@ -84,14 +84,14 @@ pub async fn verify_pool_tokens(provider: Arc<Provider<Ws>>) -> Result<()> {
         if token1 != cfg.expected_token1 {
             return Err(eyre!(
                 "Pool {} token1 mismatch: on-chain={:?} expected={:?}",
-                cfg.pool_id.name(),
+                cfg.name,
                 token1,
                 cfg.expected_token1
             ));
         }
 
         info!(
-            pool = cfg.pool_id.name(),
+            pool = cfg.name,
             token0 = cfg.token0_symbol,
             token1 = cfg.token1_symbol,
             "token ordering verified"
@@ -103,9 +103,12 @@ pub async fn verify_pool_tokens(provider: Arc<Provider<Ws>>) -> Result<()> {
 
 // ─── Startup: bootstrap reserves ─────────────────────────────────────────────
 
-pub async fn bootstrap_reserves(provider: Arc<Provider<Ws>>) -> Result<PoolRegistry> {
+pub async fn bootstrap_reserves(
+    provider: Arc<Provider<Ws>>,
+    chain: ChainId,
+) -> Result<PoolRegistry> {
     let abi = parse_abi();
-    let configs = pool_configs();
+    let configs = pool_catalog(chain);
 
     let current_block = provider
         .get_block_number()
@@ -113,26 +116,15 @@ pub async fn bootstrap_reserves(provider: Arc<Provider<Ws>>) -> Result<PoolRegis
         .wrap_err("get_block_number")?
         .as_u64();
 
-    // Fetch reserves for all 3 pools concurrently
-    let (r0, r1, r2) = tokio::join!(
-        fetch_reserves(&abi, provider.clone(), &configs[0]),
-        fetch_reserves(&abi, provider.clone(), &configs[1]),
-        fetch_reserves(&abi, provider.clone(), &configs[2]),
-    );
-
     let registry = PoolRegistry::new();
 
-    for (result, cfg) in [
-        (r0, &configs[0]),
-        (r1, &configs[1]),
-        (r2, &configs[2]),
-    ] {
-        let (reserve0, reserve1) = result.wrap_err_with(|| {
-            format!("bootstrap getReserves failed for {}", cfg.pool_id.name())
-        })?;
+    for cfg in &configs {
+        let (reserve0, reserve1) = fetch_reserves(&abi, provider.clone(), cfg.pool_key.address)
+            .await
+            .wrap_err_with(|| format!("bootstrap getReserves failed for {}", cfg.name))?;
 
         info!(
-            pool = cfg.pool_id.name(),
+            pool = cfg.name,
             reserve0 = %reserve0,
             reserve1 = %reserve1,
             block = current_block,
@@ -141,10 +133,12 @@ pub async fn bootstrap_reserves(provider: Arc<Provider<Ws>>) -> Result<PoolRegis
 
         registry
             .update(
-                cfg.pool_id,
-                PoolState {
+                cfg.pool_key,
+                PoolState::V2 {
                     reserve0,
                     reserve1,
+                    token0: cfg.expected_token0,
+                    token1: cfg.expected_token1,
                     last_block: current_block,
                 },
             )
@@ -154,8 +148,12 @@ pub async fn bootstrap_reserves(provider: Arc<Provider<Ws>>) -> Result<PoolRegis
     Ok(registry)
 }
 
-async fn fetch_reserves(abi: &Abi, provider: Arc<Provider<Ws>>, cfg: &PoolConfig) -> Result<(U256, U256)> {
-    let contract = Contract::new(cfg.pair_address, abi.clone(), provider);
+async fn fetch_reserves(
+    abi: &Abi,
+    provider: Arc<Provider<Ws>>,
+    address: Address,
+) -> Result<(U256, U256)> {
+    let contract = Contract::new(address, abi.clone(), provider);
     let (r0, r1, _ts): (u128, u128, u32) = contract
         .method::<_, (u128, u128, u32)>("getReserves", ())?
         .call()
@@ -164,17 +162,18 @@ async fn fetch_reserves(abi: &Abi, provider: Arc<Provider<Ws>>, cfg: &PoolConfig
     Ok((U256::from(r0), U256::from(r1)))
 }
 
-// ─── Sync event subscriptions ────────────────────────────────────────────────
+// ─── Sync event subscriptions ─────────────────────────────────────────────────
 
-/// Subscribes to Sync events for all 3 pools. Returns on stream end or error.
-/// Caller wraps in a reconnect loop.
+/// Subscribes to Sync events for all V2 pools on the given chain.
+/// Returns on stream end or error. Caller wraps in a reconnect loop.
 pub async fn run_subscriptions(
     provider: Arc<Provider<Ws>>,
     registry: PoolRegistry,
+    chain: ChainId,
     arb_tx: tokio::sync::watch::Sender<()>,
 ) -> Result<()> {
-    let configs = pool_configs();
-    let pair_addresses: Vec<Address> = configs.iter().map(|c| c.pair_address).collect();
+    let configs = pool_catalog(chain);
+    let pair_addresses: Vec<Address> = configs.iter().map(|c| c.pool_key.address).collect();
     let sync_topic = ethers::core::utils::keccak256("Sync(uint112,uint112)");
 
     let filter = Filter::new()
@@ -186,17 +185,17 @@ pub async fn run_subscriptions(
         .await
         .wrap_err("subscribe_logs")?;
 
-    info!("subscribed to Sync events for all 3 pools");
+    info!(chain = chain.name(), "subscribed to Sync events");
 
     while let Some(log) = stream.next().await {
-        handle_sync_log(log, &registry).await;
+        handle_sync_log(log, &registry, chain).await;
         let _ = arb_tx.send(());
     }
 
     Err(eyre!("Sync log stream ended unexpectedly"))
 }
 
-async fn handle_sync_log(log: Log, registry: &PoolRegistry) {
+async fn handle_sync_log(log: Log, registry: &PoolRegistry, chain: ChainId) {
     let address = log.address;
     let block_number = match log.block_number {
         Some(b) => b.as_u64(),
@@ -206,18 +205,17 @@ async fn handle_sync_log(log: Log, registry: &PoolRegistry) {
         }
     };
 
-    let pool_id = pool_configs()
-        .iter()
-        .find(|c| c.pair_address == address)
-        .map(|c| c.pool_id);
+    let entry: Option<PoolCatalogEntry> = pool_catalog(chain)
+        .into_iter()
+        .find(|c| c.pool_key.address == address);
 
-    let Some(pool_id) = pool_id else {
+    let Some(entry) = entry else {
         warn!(?address, "received Sync from unknown address");
         return;
     };
 
     if log.data.len() < 64 {
-        warn!(pool = pool_id.name(), "Sync log data too short");
+        warn!(pool = entry.name, "Sync log data too short");
         return;
     }
     let reserve0 = U256::from_big_endian(&log.data[0..32]);
@@ -225,10 +223,12 @@ async fn handle_sync_log(log: Log, registry: &PoolRegistry) {
 
     registry
         .update(
-            pool_id,
-            PoolState {
+            entry.pool_key,
+            PoolState::V2 {
                 reserve0,
                 reserve1,
+                token0: entry.expected_token0,
+                token1: entry.expected_token1,
                 last_block: block_number,
             },
         )
@@ -244,38 +244,41 @@ const STALE_BLOCK_THRESHOLD: u64 = 50;
 pub async fn refresh_stale_pools(
     provider: Arc<Provider<Ws>>,
     registry: &PoolRegistry,
+    chain: ChainId,
     current_block: u64,
 ) {
     let abi = parse_abi();
-    let configs = pool_configs();
+    let configs = pool_catalog(chain);
 
     for cfg in &configs {
         let stale = registry
-            .get(cfg.pool_id)
+            .get(cfg.pool_key)
             .await
-            .map(|s| current_block.saturating_sub(s.last_block) > STALE_BLOCK_THRESHOLD)
+            .map(|s| current_block.saturating_sub(s.last_block()) > STALE_BLOCK_THRESHOLD)
             .unwrap_or(true);
 
         if stale {
             warn!(
-                pool = cfg.pool_id.name(),
+                pool = cfg.name,
                 current_block,
                 "pool is stale, refreshing via getReserves()"
             );
-            match fetch_reserves(&abi, provider.clone(), cfg).await {
+            match fetch_reserves(&abi, provider.clone(), cfg.pool_key.address).await {
                 Ok((r0, r1)) => {
                     registry
                         .update(
-                            cfg.pool_id,
-                            PoolState {
+                            cfg.pool_key,
+                            PoolState::V2 {
                                 reserve0: r0,
                                 reserve1: r1,
+                                token0: cfg.expected_token0,
+                                token1: cfg.expected_token1,
                                 last_block: current_block,
                             },
                         )
                         .await;
                 }
-                Err(e) => error!(pool = cfg.pool_id.name(), "refresh failed: {e}"),
+                Err(e) => error!(pool = cfg.name, "refresh failed: {e}"),
             }
         }
     }
