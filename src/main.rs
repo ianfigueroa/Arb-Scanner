@@ -18,9 +18,10 @@ use tracing::{error, info, warn};
 use tracing_subscriber::EnvFilter;
 
 use arb::{scan_all_opportunities, u256_to_f64};
+use config::PoolCatalogEntry;
 use cross_chain::{cross_chain_monitor, PriceRef};
 use db::OpportunityDb;
-use pools::{bootstrap_reserves, refresh_stale_pools, run_subscriptions, verify_pool_tokens};
+use pools::{bootstrap_reserves, refresh_stale_pools, resolve_pool_catalog, run_subscriptions, verify_pool_tokens};
 use types::{ChainId, PoolKey, PoolState, SessionStats};
 
 // ─── Entry point ──────────────────────────────────────────────────────────────
@@ -116,7 +117,7 @@ async fn main() -> Result<()> {
         }
         let csv_ts = SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .unwrap()
+            .unwrap_or_default()
             .as_secs();
         let csv_path = format!("arb_opportunities_{csv_ts}.csv");
         match db.export_csv(&csv_path) {
@@ -171,17 +172,25 @@ async fn spawn_chain_tasks(
     );
     info!(chain = chain.name(), "connected to node");
 
-    verify_pool_tokens(provider.clone(), chain)
+    // Resolve pool catalog from factory (Base/Polygon) or static config (Eth/Arb).
+    let (catalog, paths) = resolve_pool_catalog(&provider, chain)
+        .await
+        .wrap_err_with(|| format!("pool catalog resolution failed for {}", chain.name()))?;
+    info!(chain = chain.name(), pools = catalog.len(), "pool catalog resolved");
+
+    let catalog = Arc::new(catalog);
+    let paths = Arc::new(paths);
+
+    verify_pool_tokens(provider.clone(), &catalog)
         .await
         .wrap_err_with(|| format!("token verification failed for {}", chain.name()))?;
     info!(chain = chain.name(), "pool token orderings verified");
 
-    let registry = bootstrap_reserves(provider.clone(), chain)
+    let registry = bootstrap_reserves(provider.clone(), &catalog)
         .await
         .wrap_err_with(|| format!("bootstrap failed for {}", chain.name()))?;
     info!(chain = chain.name(), "reserves bootstrapped");
 
-    let paths = Arc::new(config::arb_paths(chain));
     let gas_price: Arc<RwLock<Option<U256>>> = Arc::new(RwLock::new(None));
     let (arb_tx, mut arb_rx) = watch::channel(());
 
@@ -189,6 +198,7 @@ async fn spawn_chain_tasks(
     {
         let ws_url_sub = ws_url.clone();
         let registry_sub = registry.clone();
+        let catalog_sub = catalog.clone();
         let arb_tx_sub = arb_tx.clone();
         tokio::spawn(async move {
             let mut backoff = Duration::from_secs(1);
@@ -208,6 +218,7 @@ async fn spawn_chain_tasks(
                         match run_subscriptions(
                             fresh_provider,
                             registry_sub.clone(),
+                            catalog_sub.clone(),
                             chain,
                             arb_tx_sub.clone(),
                         )
@@ -235,6 +246,7 @@ async fn spawn_chain_tasks(
         let provider_blocks = provider.clone();
         let gas_price_blocks = gas_price.clone();
         let registry_blocks = registry.clone();
+        let catalog_blocks = catalog.clone();
         let stats_blocks = stats.clone();
         let weth_usd_price_blocks = weth_usd_price.clone();
         let db_blocks = db.clone();
@@ -262,15 +274,15 @@ async fn spawn_chain_tasks(
                         refresh_stale_pools(
                             provider_blocks.clone(),
                             &registry_blocks,
-                            chain,
+                            &catalog_blocks,
                             block_num,
                         )
                         .await;
 
                         let snap = registry_blocks.snapshot().await;
-                        let price_line = build_chain_price_line(chain, &snap);
+                        let price_line = build_chain_price_line(chain, &snap, &catalog_blocks);
 
-                        if let Some(p) = chain_weth_usd_price(chain, &snap) {
+                        if let Some(p) = chain_weth_usd_price(chain, &snap, &catalog_blocks) {
                             *weth_usd_price_blocks.write().await = Some(p);
                             if let Err(e) =
                                 db_blocks.insert_price_snapshot(chain.name(), block_num, p)
@@ -297,6 +309,7 @@ async fn spawn_chain_tasks(
     {
         let registry_arb = registry.clone();
         let gas_price_arb = gas_price.clone();
+        let catalog_arb = catalog.clone();
         let stats_arb = stats.clone();
         let paths_arb = paths.clone();
         let db_arb = db.clone();
@@ -312,7 +325,7 @@ async fn spawn_chain_tasks(
                 };
 
                 let snap = registry_arb.snapshot().await;
-                let weth_price_usd = match chain_weth_usd_price(chain, &snap) {
+                let weth_price_usd = match chain_weth_usd_price(chain, &snap, &catalog_arb) {
                     Some(p) => p,
                     None => continue,
                 };
@@ -362,12 +375,17 @@ async fn spawn_chain_tasks(
 
 // ─── Price helpers ────────────────────────────────────────────────────────────
 
-/// Derive the WETH/USD price for any chain from its primary WETH/stable V2 pool.
-///
-/// Uses `config::weth_usdc_pool_info` to identify which reserve is USDC (6 dec)
-/// and which is WETH (18 dec), then computes: usdc_raw * 1e12 / weth_raw.
-fn chain_weth_usd_price(chain: ChainId, snap: &HashMap<PoolKey, PoolState>) -> Option<f64> {
-    let (key, usdc_is_token0) = config::weth_usdc_pool_info(chain)?;
+/// Derive the WETH/USD price from the runtime-resolved catalog's WETH/USDC pool.
+fn chain_weth_usd_price(
+    chain: ChainId,
+    snap: &HashMap<PoolKey, PoolState>,
+    catalog: &[PoolCatalogEntry],
+) -> Option<f64> {
+    let (key, usdc_is_token0) = config::weth_usdc_from_catalog(catalog)?;
+    // Only use the pool if it belongs to this chain (sanity check).
+    if key.chain != chain {
+        return None;
+    }
     if let PoolState::V2 { reserve0, reserve1, .. } = snap.get(&key)? {
         let (usdc_raw, weth_raw) = if usdc_is_token0 {
             (u256_to_f64(*reserve0), u256_to_f64(*reserve1))
@@ -383,8 +401,12 @@ fn chain_weth_usd_price(chain: ChainId, snap: &HashMap<PoolKey, PoolState>) -> O
     }
 }
 
-fn build_chain_price_line(chain: ChainId, snap: &HashMap<PoolKey, PoolState>) -> String {
-    match chain_weth_usd_price(chain, snap) {
+fn build_chain_price_line(
+    chain: ChainId,
+    snap: &HashMap<PoolKey, PoolState>,
+    catalog: &[PoolCatalogEntry],
+) -> String {
+    match chain_weth_usd_price(chain, snap, catalog) {
         Some(p) => format!("WETH: ${p:.2}"),
         None => "WETH: N/A".to_string(),
     }
