@@ -39,6 +39,87 @@ pub fn weth_usdc_key() -> PoolKey {
     pool_key_weth_usdc()
 }
 
+/// BaseSwap V2 factory — used to resolve canonical pool addresses at runtime.
+pub fn factory() -> Address {
+    addr("0xFDa619b6d20975be80A10332cD39b9a4b0FAa8BB")
+}
+
+// ─── Runtime-resolved catalog + paths ────────────────────────────────────────
+
+/// Build the pool catalog from factory-resolved pool addresses.
+pub fn base_pools_from_pairs(
+    weth_usdc: Address,
+    weth_dai: Address,
+    dai_usdc: Address,
+) -> Vec<PoolCatalogEntry> {
+    vec![
+        PoolCatalogEntry {
+            pool_key: PoolKey::new(ChainId::Base, weth_usdc),
+            dex_type: DexType::UniswapV2,
+            expected_token0: weth(),
+            expected_token1: usdc(),
+            token0_symbol: "WETH",
+            token1_symbol: "USDC",
+            name: "WETH/USDC BaseSwapV2",
+            fee_tier: 0,
+            n_coins: 0,
+        },
+        PoolCatalogEntry {
+            pool_key: PoolKey::new(ChainId::Base, weth_dai),
+            dex_type: DexType::UniswapV2,
+            expected_token0: weth(),
+            expected_token1: dai(),
+            token0_symbol: "WETH",
+            token1_symbol: "DAI",
+            name: "WETH/DAI BaseSwapV2",
+            fee_tier: 0,
+            n_coins: 0,
+        },
+        PoolCatalogEntry {
+            pool_key: PoolKey::new(ChainId::Base, dai_usdc),
+            dex_type: DexType::UniswapV2,
+            expected_token0: dai(),
+            expected_token1: usdc(),
+            token0_symbol: "DAI",
+            token1_symbol: "USDC",
+            name: "DAI/USDC BaseSwapV2",
+            fee_tier: 0,
+            n_coins: 0,
+        },
+    ]
+}
+
+/// Build the arb paths from factory-resolved pool addresses.
+pub fn base_arb_paths_from_pairs(
+    weth_usdc: Address,
+    weth_dai: Address,
+    dai_usdc: Address,
+) -> Vec<ArbPath> {
+    let k_wu = PoolKey::new(ChainId::Base, weth_usdc);
+    let k_wd = PoolKey::new(ChainId::Base, weth_dai);
+    let k_du = PoolKey::new(ChainId::Base, dai_usdc);
+    vec![
+        ArbPath {
+            name: "WETH→USDC→DAI→WETH",
+            chain: ChainId::Base,
+            hops: vec![
+                HopSpec { pool_key: k_wu, dex_type: DexType::UniswapV2, token_in: weth(), token_out: usdc() },
+                HopSpec { pool_key: k_du, dex_type: DexType::UniswapV2, token_in: usdc(), token_out: dai() },
+                HopSpec { pool_key: k_wd, dex_type: DexType::UniswapV2, token_in: dai(), token_out: weth() },
+            ],
+        },
+        ArbPath {
+            name: "WETH→DAI→USDC→WETH",
+            chain: ChainId::Base,
+            hops: vec![
+                HopSpec { pool_key: k_wd, dex_type: DexType::UniswapV2, token_in: weth(), token_out: dai() },
+                HopSpec { pool_key: k_du, dex_type: DexType::UniswapV2, token_in: dai(), token_out: usdc() },
+                HopSpec { pool_key: k_wu, dex_type: DexType::UniswapV2, token_in: usdc(), token_out: weth() },
+            ],
+        },
+    ]
+}
+
 // ─── Pool catalog ─────────────────────────────────────────────────────────────
 
 pub fn base_pools() -> Vec<PoolCatalogEntry> {
