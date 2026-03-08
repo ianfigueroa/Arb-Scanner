@@ -8,38 +8,36 @@ use crate::dex;
 pub use crate::dex::v2::amm_out;
 use crate::types::{ArbOpportunity, ArbPath, ChainId, PoolKey, PoolState};
 
-/// Maximum block difference across pools in a path before skipping arb calculation.
-pub const MAX_BLOCK_SKEW: u64 = 3;
+/// Maximum blocks a pool's last_block may lag behind current_block before its data
+/// is considered too stale to use in arb calculations.
+pub const MAX_STALE_BLOCKS: u64 = 20;
 
 /// Gas units estimated for a 3-hop triangular arb.
 const GAS_UNITS: u64 = 150_000;
 
 // ─── Freshness guard ──────────────────────────────────────────────────────────
 
-/// Returns true if all pools referenced by the path exist and their last_block
-/// values are within MAX_BLOCK_SKEW of each other.
-fn path_is_fresh(pools: &HashMap<PoolKey, PoolState>, path: &ArbPath) -> bool {
-    let blocks: Vec<u64> = path
-        .hops
-        .iter()
-        .filter_map(|hop| pools.get(&hop.pool_key).map(|s| s.last_block()))
-        .collect();
-
-    if blocks.len() < path.hops.len() {
-        warn!("freshness guard: not all path pools have state");
-        return false;
-    }
-
-    let min = *blocks.iter().min().unwrap();
-    let max = *blocks.iter().max().unwrap();
-    if max - min > MAX_BLOCK_SKEW {
-        warn!(
-            min_block = min,
-            max_block = max,
-            skew = max - min,
-            "freshness guard: pool states too far apart, skipping arb"
-        );
-        return false;
+/// Returns true if all pools referenced by the path exist and each pool's
+/// last_block is within MAX_STALE_BLOCKS of current_block.
+///
+/// Missing an event does not mean stale data — it means no trade happened.
+/// The correct check is individual pool age against the current chain head.
+fn path_is_fresh(pools: &HashMap<PoolKey, PoolState>, path: &ArbPath, current_block: u64) -> bool {
+    for hop in &path.hops {
+        let Some(state) = pools.get(&hop.pool_key) else {
+            warn!("freshness guard: pool missing from registry");
+            return false;
+        };
+        let age = current_block.saturating_sub(state.last_block());
+        if age > MAX_STALE_BLOCKS {
+            warn!(
+                last_block = state.last_block(),
+                current_block,
+                age,
+                "freshness guard: pool data too stale, skipping arb"
+            );
+            return false;
+        }
     }
     true
 }
@@ -52,8 +50,9 @@ pub(crate) fn execute_path(
     pools: &HashMap<PoolKey, PoolState>,
     path: &ArbPath,
     amount_in: U256,
+    current_block: u64,
 ) -> Option<U256> {
-    if !path_is_fresh(pools, path) {
+    if !path_is_fresh(pools, path, current_block) {
         return None;
     }
     let mut amount = amount_in;
@@ -125,13 +124,14 @@ pub fn scan_all_opportunities(
     paths: &[ArbPath],
     gas_price: U256,
     weth_price_usd: f64,
+    current_block: u64,
 ) -> Vec<ArbOpportunity> {
     let mut opps = Vec::new();
 
     for path in paths {
         for &size in &INPUT_SIZES_ETH {
             let input = U256::from(size);
-            if let Some(out) = execute_path(pools, path, input) {
+            if let Some(out) = execute_path(pools, path, input, current_block) {
                 opps.push(apply_gas(out, input, gas_price, weth_price_usd, path.name, path.chain));
             }
         }
@@ -366,24 +366,25 @@ mod tests {
     // ── Freshness guard ───────────────────────────────────────────────────────
 
     #[test]
-    fn test_freshness_guard_passes_when_within_skew() {
+    fn test_freshness_guard_passes_when_fresh() {
+        // All pools at block 100; current_block=110. Age=10 for oldest, within MAX_STALE_BLOCKS=20.
         let pools = make_pools(
             1_000_000, 300_000_000_000_000_000_000u128, 100,
-            3_000_000_000_000_000_000_000u128, 1_000_000, 101,
-            3_000_000_000_000_000_000_000u128, 1_000_000_000_000_000_000u128, 102,
+            3_000_000_000_000_000_000_000u128, 1_000_000, 105,
+            3_000_000_000_000_000_000_000u128, 1_000_000_000_000_000_000u128, 108,
         );
-        // max - min = 2, within MAX_BLOCK_SKEW=3
-        assert!(path_is_fresh(&pools, &forward_path()));
+        assert!(path_is_fresh(&pools, &forward_path(), 110));
     }
 
     #[test]
     fn test_freshness_guard_skips_stale() {
+        // wu_pool at block 80, current_block=105 → age=25 > MAX_STALE_BLOCKS=20.
         let pools = make_pools(
-            1_000_000, 300_000_000_000_000_000_000u128, 100,
-            3_000_000_000_000_000_000_000u128, 1_000_000, 105, // 5 blocks ahead
+            1_000_000, 300_000_000_000_000_000_000u128, 80,
+            3_000_000_000_000_000_000_000u128, 1_000_000, 100,
             3_000_000_000_000_000_000_000u128, 1_000_000_000_000_000_000u128, 100,
         );
-        assert!(!path_is_fresh(&pools, &forward_path()));
+        assert!(!path_is_fresh(&pools, &forward_path(), 105));
     }
 
     #[test]
@@ -397,17 +398,18 @@ mod tests {
             last_block: 100,
         });
         // ud_key and dw_key missing — path has 3 hops but only 1 pool
-        assert!(!path_is_fresh(&pools, &forward_path()));
+        assert!(!path_is_fresh(&pools, &forward_path(), 100));
     }
 
     #[test]
     fn test_execute_path_returns_none_when_stale() {
+        // wu_pool at block 80, current_block=105 → age=25 > MAX_STALE_BLOCKS=20.
         let pools = make_pools(
-            1_000_000, 300_000_000_000_000_000_000u128, 100,
-            3_000_000_000_000_000_000_000u128, 1_000_000, 110, // stale
+            1_000_000, 300_000_000_000_000_000_000u128, 80,
+            3_000_000_000_000_000_000_000u128, 1_000_000, 100,
             3_000_000_000_000_000_000_000u128, 1_000_000_000_000_000_000u128, 100,
         );
-        assert!(execute_path(&pools, &forward_path(), eth(1)).is_none());
+        assert!(execute_path(&pools, &forward_path(), eth(1), 105).is_none());
     }
 
     // ── Path direction ────────────────────────────────────────────────────────
@@ -430,8 +432,8 @@ mod tests {
             dai_dw, weth_dw, 100,
         );
 
-        let fwd = execute_path(&pools, &forward_path(), eth(1));
-        let rev = execute_path(&pools, &reverse_path(), eth(1));
+        let fwd = execute_path(&pools, &forward_path(), eth(1), 100);
+        let rev = execute_path(&pools, &reverse_path(), eth(1), 100);
 
         assert!(fwd.is_some(), "forward path should produce a result");
         assert!(rev.is_some(), "reverse path should produce a result");
@@ -460,7 +462,7 @@ mod tests {
         );
 
         let input = U256::from(1_000_000_000_000_000u64); // 0.001 WETH
-        let out = execute_path(&pools, &forward_path(), input);
+        let out = execute_path(&pools, &forward_path(), input, 100);
 
         assert!(out.is_some(), "should produce a result");
         let out_val = out.unwrap();

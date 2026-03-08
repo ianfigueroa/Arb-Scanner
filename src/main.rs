@@ -192,6 +192,7 @@ async fn spawn_chain_tasks(
     info!(chain = chain.name(), "reserves bootstrapped");
 
     let gas_price: Arc<RwLock<Option<U256>>> = Arc::new(RwLock::new(None));
+    let current_block: Arc<RwLock<u64>> = Arc::new(RwLock::new(0));
     let (arb_tx, mut arb_rx) = watch::channel(());
 
     // Subscription task (reconnect loop)
@@ -245,6 +246,7 @@ async fn spawn_chain_tasks(
     {
         let provider_blocks = provider.clone();
         let gas_price_blocks = gas_price.clone();
+        let current_block_blocks = current_block.clone();
         let registry_blocks = registry.clone();
         let catalog_blocks = catalog.clone();
         let stats_blocks = stats.clone();
@@ -256,6 +258,7 @@ async fn spawn_chain_tasks(
                 Ok(mut stream) => {
                     while let Some(block) = stream.next().await {
                         let block_num = block.number.map(|b| b.as_u64()).unwrap_or(0);
+                        *current_block_blocks.write().await = block_num;
 
                         let gp = match provider_blocks.get_gas_price().await {
                             Ok(p) => {
@@ -309,6 +312,7 @@ async fn spawn_chain_tasks(
     {
         let registry_arb = registry.clone();
         let gas_price_arb = gas_price.clone();
+        let current_block_arb = current_block.clone();
         let catalog_arb = catalog.clone();
         let stats_arb = stats.clone();
         let paths_arb = paths.clone();
@@ -324,13 +328,18 @@ async fn spawn_chain_tasks(
                     None => continue,
                 };
 
+                let block = *current_block_arb.read().await;
+                if block == 0 {
+                    continue;
+                }
+
                 let snap = registry_arb.snapshot().await;
                 let weth_price_usd = match chain_weth_usd_price(chain, &snap, &catalog_arb) {
                     Some(p) => p,
                     None => continue,
                 };
 
-                let opps = scan_all_opportunities(&snap, &paths_arb, gp, weth_price_usd);
+                let opps = scan_all_opportunities(&snap, &paths_arb, gp, weth_price_usd, block);
 
                 // Insert profitable opportunities before acquiring the stats lock.
                 for opp in &opps {

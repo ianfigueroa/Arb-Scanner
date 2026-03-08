@@ -49,10 +49,14 @@ pub fn weth_usdc_from_catalog(catalog: &[PoolCatalogEntry]) -> Option<(PoolKey, 
     catalog
         .iter()
         .find(|e| {
-            (e.token0_symbol == "WETH" && e.token1_symbol == "USDC")
-                || (e.token0_symbol == "USDC" && e.token1_symbol == "WETH")
+            let t0_is_usdc = e.token0_symbol == "USDC" || e.token0_symbol == "USDC.e";
+            let t1_is_usdc = e.token1_symbol == "USDC" || e.token1_symbol == "USDC.e";
+            (e.token0_symbol == "WETH" && t1_is_usdc) || (t0_is_usdc && e.token1_symbol == "WETH")
         })
-        .map(|e| (e.pool_key, e.token0_symbol == "USDC"))
+        .map(|e| {
+            let usdc_is_token0 = e.token0_symbol == "USDC" || e.token0_symbol == "USDC.e";
+            (e.pool_key, usdc_is_token0)
+        })
 }
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
