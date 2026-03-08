@@ -1,13 +1,14 @@
 mod arb;
 mod config;
 mod cross_chain;
+mod db;
 mod dex;
 mod pools;
 mod types;
 
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use ethers::providers::{Middleware, Provider, StreamExt, Ws};
 use ethers::types::U256;
@@ -18,6 +19,7 @@ use tracing_subscriber::EnvFilter;
 
 use arb::{scan_all_opportunities, u256_to_f64};
 use cross_chain::{cross_chain_monitor, PriceRef};
+use db::OpportunityDb;
 use pools::{bootstrap_reserves, refresh_stale_pools, run_subscriptions, verify_pool_tokens};
 use types::{ChainId, PoolKey, PoolState, SessionStats};
 
@@ -44,6 +46,12 @@ async fn main() -> Result<()> {
 
     info!("arb-bot starting on {} chain(s)", chains.len());
 
+    let db = Arc::new(
+        OpportunityDb::open("arb_opportunities.db")
+            .wrap_err("failed to open opportunity database")?,
+    );
+    info!(path = "arb_opportunities.db", "database opened");
+
     let stats: Arc<RwLock<SessionStats>> = Arc::new(RwLock::new(SessionStats::default()));
     let start_time = Instant::now();
 
@@ -57,7 +65,7 @@ async fn main() -> Result<()> {
     for (chain, ws_url) in chains {
         let price_ref: PriceRef = Arc::new(RwLock::new(None));
         price_refs.push((chain, price_ref.clone()));
-        spawn_chain_tasks(chain, ws_url, stats.clone(), price_ref)
+        spawn_chain_tasks(chain, ws_url, stats.clone(), price_ref, db.clone())
             .await
             .wrap_err_with(|| format!("failed to start {} scanner", chain.name()))?;
     }
@@ -87,6 +95,34 @@ async fn main() -> Result<()> {
     }
     println!("Runtime:              {:.1}s", elapsed.as_secs_f64());
     println!("======================");
+
+    // ── Phase 3: Research summary ──────────────────────────────────────────────
+    let by_count = db.top_paths_by_count(5).unwrap_or_default();
+    let by_roi = db.top_paths_by_avg_roi(5).unwrap_or_default();
+
+    if by_count.is_empty() {
+        println!("\nNo data recorded.");
+    } else {
+        println!("\n=== Research Summary ===");
+        println!("Top paths by frequency:");
+        for (i, (path, count)) in by_count.iter().enumerate() {
+            println!("  {}.  {}     {} hits", i + 1, path, count);
+        }
+        println!("\nTop paths by avg ROI:");
+        for (i, (path, roi)) in by_roi.iter().enumerate() {
+            println!("  {}.  {}     {:.4}%", i + 1, path, roi);
+        }
+        let csv_ts = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let csv_path = format!("arb_opportunities_{csv_ts}.csv");
+        match db.export_csv(&csv_path) {
+            Ok(()) => println!("\nExported: {csv_path}"),
+            Err(e) => println!("\nCSV export failed: {e:#}"),
+        }
+        println!("========================");
+    }
 
     Ok(())
 }
@@ -124,6 +160,7 @@ async fn spawn_chain_tasks(
     ws_url: String,
     stats: Arc<RwLock<SessionStats>>,
     weth_usd_price: PriceRef,
+    db: Arc<OpportunityDb>,
 ) -> Result<()> {
     let provider = Arc::new(
         Provider::<Ws>::connect(&ws_url)
@@ -198,6 +235,7 @@ async fn spawn_chain_tasks(
         let registry_blocks = registry.clone();
         let stats_blocks = stats.clone();
         let weth_usd_price_blocks = weth_usd_price.clone();
+        let db_blocks = db.clone();
         tokio::spawn(async move {
             match provider_blocks.subscribe_blocks().await {
                 Err(e) => error!(chain = chain.name(), "subscribe_blocks failed: {e}"),
@@ -232,6 +270,11 @@ async fn spawn_chain_tasks(
 
                         if let Some(p) = chain_weth_usd_price(chain, &snap) {
                             *weth_usd_price_blocks.write().await = Some(p);
+                            if let Err(e) =
+                                db_blocks.insert_price_snapshot(chain.name(), block_num, p)
+                            {
+                                warn!(chain = chain.name(), "insert_price_snapshot failed: {e:#}");
+                            }
                         }
 
                         info!(
@@ -254,6 +297,7 @@ async fn spawn_chain_tasks(
         let gas_price_arb = gas_price.clone();
         let stats_arb = stats.clone();
         let paths_arb = paths.clone();
+        let db_arb = db.clone();
         tokio::spawn(async move {
             loop {
                 if arb_rx.changed().await.is_err() {
@@ -272,8 +316,17 @@ async fn spawn_chain_tasks(
                 };
 
                 let opps = scan_all_opportunities(&snap, &paths_arb, gp, weth_price_usd);
-                let mut s = stats_arb.write().await;
 
+                // Insert profitable opportunities before acquiring the stats lock.
+                for opp in &opps {
+                    if opp.estimated_net_after_gas > 0 {
+                        if let Err(e) = db_arb.insert_opportunity(opp) {
+                            warn!(chain = chain.name(), "insert_opportunity failed: {e:#}");
+                        }
+                    }
+                }
+
+                let mut s = stats_arb.write().await;
                 for opp in opps {
                     if opp.estimated_net_after_gas > 0 {
                         s.opps_found += 1;

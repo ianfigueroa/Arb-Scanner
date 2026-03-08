@@ -7,7 +7,7 @@ use ethers::providers::{Middleware, Provider, StreamExt, Ws};
 use ethers::types::{Address, Filter, Log, H256, U256};
 use eyre::{eyre, Result, WrapErr};
 use tokio::sync::RwLock;
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 
 use crate::config::{pool_catalog, PoolCatalogEntry};
 use crate::types::{ChainId, DexType, PoolKey, PoolState};
@@ -321,7 +321,7 @@ async fn handle_sync_log(log: Log, registry: &PoolRegistry, chain: ChainId) {
         .find(|c| c.pool_key.address == address);
 
     let Some(entry) = entry else {
-        warn!(?address, "received Sync from unknown address");
+        debug!(?address, "received Sync from unknown address");
         return;
     };
 
@@ -358,7 +358,7 @@ async fn handle_swap_log(log: Log, registry: &PoolRegistry, chain: ChainId) {
 
     let entry = pool_catalog(chain).into_iter().find(|c| c.pool_key.address == address);
     let Some(entry) = entry else {
-        warn!(?address, "received Swap from unknown address");
+        debug!(?address, "received Swap from unknown address");
         return;
     };
 
@@ -395,7 +395,7 @@ async fn handle_token_exchange_log(log: Log, registry: &PoolRegistry, chain: Cha
 
     let entry = pool_catalog(chain).into_iter().find(|c| c.pool_key.address == address);
     let Some(entry) = entry else {
-        warn!(?address, "received TokenExchange from unknown address");
+        debug!(?address, "received TokenExchange from unknown address");
         return;
     };
 

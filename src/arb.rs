@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use ethers::types::U256;
 use tracing::warn;
@@ -92,6 +93,11 @@ pub fn apply_gas(
 
     let gas_cost_usd = (u256_to_f64(gas_cost_wei) / 1e18) * weth_price_usd;
 
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+
     ArbOpportunity {
         path,
         chain,
@@ -99,6 +105,7 @@ pub fn apply_gas(
         estimated_net_after_gas,
         roi_pct,
         gas_cost_usd,
+        timestamp,
     }
 }
 
@@ -136,7 +143,10 @@ pub fn scan_all_opportunities(
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 fn u256_to_i128_lossy(v: U256) -> i128 {
-    v.low_u128() as i128
+    // Clamp to i128::MAX before casting; values this large indicate an overflow
+    // elsewhere, but we must not silently wrap into negative territory.
+    let max = U256::from(i128::MAX as u128);
+    v.min(max).low_u128() as i128
 }
 
 pub fn u256_to_f64(v: U256) -> f64 {

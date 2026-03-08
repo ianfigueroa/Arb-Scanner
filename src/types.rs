@@ -96,6 +96,8 @@ pub struct ArbOpportunity {
     pub estimated_net_after_gas: i128,
     pub roi_pct: f64,
     pub gas_cost_usd: f64,
+    /// Unix timestamp (seconds) when this opportunity was computed.
+    pub timestamp: u64,
 }
 
 #[derive(Debug, Default)]
