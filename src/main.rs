@@ -65,9 +65,11 @@ async fn main() -> Result<()> {
     for (chain, ws_url) in chains {
         let price_ref: PriceRef = Arc::new(RwLock::new(None));
         price_refs.push((chain, price_ref.clone()));
-        spawn_chain_tasks(chain, ws_url, stats.clone(), price_ref, db.clone())
-            .await
-            .wrap_err_with(|| format!("failed to start {} scanner", chain.name()))?;
+        if let Err(e) =
+            spawn_chain_tasks(chain, ws_url, stats.clone(), price_ref, db.clone()).await
+        {
+            error!(chain = chain.name(), "chain startup failed, skipping: {e:#}");
+        }
     }
 
     tokio::spawn(cross_chain_monitor(price_refs, threshold_pct));
