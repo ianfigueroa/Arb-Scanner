@@ -9,10 +9,10 @@ use eyre::{eyre, Result, WrapErr};
 use tokio::sync::RwLock;
 use tracing::{debug, error, info, warn};
 
-use crate::config::{pool_catalog, PoolCatalogEntry};
-use crate::types::{ChainId, DexType, PoolKey, PoolState};
+use crate::config::{arb_paths, pool_catalog, PoolCatalogEntry};
+use crate::types::{ArbPath, ChainId, DexType, PoolKey, PoolState};
 
-// ─── ABI fragment ─────────────────────────────────────────────────────────────
+// ─── ABI fragments ────────────────────────────────────────────────────────────
 
 const PAIR_ABI: &str = r#"[
     {"inputs":[],"name":"token0","outputs":[{"internalType":"address","name":"","type":"address"}],"stateMutability":"view","type":"function"},
@@ -41,6 +41,8 @@ fn parse_curve_balances_abi() -> Abi {
     serde_json::from_str(CURVE_BALANCES_ABI).expect("hardcoded Curve balances ABI is valid JSON")
 }
 
+const FACTORY_ABI: &str = r#"[{"inputs":[{"internalType":"address","name":"tokenA","type":"address"},{"internalType":"address","name":"tokenB","type":"address"}],"name":"getPair","outputs":[{"internalType":"address","name":"pair","type":"address"}],"stateMutability":"view","type":"function"}]"#;
+
 // ─── PoolRegistry ─────────────────────────────────────────────────────────────
 
 #[derive(Clone)]
@@ -68,13 +70,105 @@ impl PoolRegistry {
     }
 }
 
+// ─── Factory resolution ───────────────────────────────────────────────────────
+
+/// Resolve pool addresses from the chain's factory contract and return the
+/// runtime catalog + arb paths with correct on-chain addresses.
+///
+/// Ethereum and Arbitrum use their static configs (addresses are well-known and
+/// verified at startup). Base and Polygon query `getPair()` from the canonical
+/// factory contract to derive the correct pair address.
+pub async fn resolve_pool_catalog(
+    provider: &Arc<Provider<Ws>>,
+    chain: ChainId,
+) -> Result<(Vec<PoolCatalogEntry>, Vec<ArbPath>)> {
+    match chain {
+        ChainId::Ethereum | ChainId::Arbitrum => {
+            Ok((pool_catalog(chain), arb_paths(chain)))
+        }
+        ChainId::Base => {
+            use crate::config::base;
+            let factory = base::factory();
+            let weth_usdc = get_pair(provider, factory, base::weth(), base::usdc())
+                .await
+                .wrap_err("Base: getPair WETH/USDC")?;
+            let weth_dai = get_pair(provider, factory, base::weth(), base::dai())
+                .await
+                .wrap_err("Base: getPair WETH/DAI")?;
+            let dai_usdc = get_pair(provider, factory, base::dai(), base::usdc())
+                .await
+                .wrap_err("Base: getPair DAI/USDC")?;
+            info!(
+                chain = "base",
+                weth_usdc = %weth_usdc,
+                weth_dai  = %weth_dai,
+                dai_usdc  = %dai_usdc,
+                "resolved pool addresses from factory"
+            );
+            Ok((
+                base::base_pools_from_pairs(weth_usdc, weth_dai, dai_usdc),
+                base::base_arb_paths_from_pairs(weth_usdc, weth_dai, dai_usdc),
+            ))
+        }
+        ChainId::Polygon => {
+            use crate::config::polygon;
+            let factory = polygon::factory();
+            let weth_usdc = get_pair(provider, factory, polygon::weth(), polygon::usdc())
+                .await
+                .wrap_err("Polygon: getPair WETH/USDC")?;
+            let usdc_dai = get_pair(provider, factory, polygon::usdc(), polygon::dai())
+                .await
+                .wrap_err("Polygon: getPair USDC/DAI")?;
+            let weth_dai = get_pair(provider, factory, polygon::weth(), polygon::dai())
+                .await
+                .wrap_err("Polygon: getPair WETH/DAI")?;
+            info!(
+                chain = "polygon",
+                weth_usdc = %weth_usdc,
+                usdc_dai  = %usdc_dai,
+                weth_dai  = %weth_dai,
+                "resolved pool addresses from factory"
+            );
+            Ok((
+                polygon::polygon_pools_from_pairs(weth_usdc, usdc_dai, weth_dai),
+                polygon::polygon_arb_paths_from_pairs(weth_usdc, usdc_dai, weth_dai),
+            ))
+        }
+    }
+}
+
+async fn get_pair(
+    provider: &Arc<Provider<Ws>>,
+    factory: Address,
+    token_a: Address,
+    token_b: Address,
+) -> Result<Address> {
+    let abi: Abi = serde_json::from_str(FACTORY_ABI).expect("factory ABI is valid");
+    let contract = Contract::new(factory, abi, provider.clone());
+    let pair: Address = contract
+        .method::<_, Address>("getPair", (token_a, token_b))?
+        .call()
+        .await
+        .wrap_err_with(|| format!("getPair({token_a:?}, {token_b:?}) failed"))?;
+    if pair == Address::zero() {
+        return Err(eyre!(
+            "getPair({:?}, {:?}) returned zero address — pair does not exist",
+            token_a,
+            token_b
+        ));
+    }
+    Ok(pair)
+}
+
 // ─── Startup: verify token ordering on-chain ─────────────────────────────────
 
-pub async fn verify_pool_tokens(provider: Arc<Provider<Ws>>, chain: ChainId) -> Result<()> {
+pub async fn verify_pool_tokens(
+    provider: Arc<Provider<Ws>>,
+    catalog: &[PoolCatalogEntry],
+) -> Result<()> {
     let abi = parse_abi();
-    let configs = pool_catalog(chain);
 
-    for cfg in &configs {
+    for cfg in catalog {
         if cfg.dex_type == DexType::CurveStableswap {
             // Curve pools use coins(i) not token0/token1; skip on-chain verification
             info!(pool = cfg.name, "skipping token verification for Curve pool");
@@ -127,10 +221,9 @@ pub async fn verify_pool_tokens(provider: Arc<Provider<Ws>>, chain: ChainId) -> 
 
 pub async fn bootstrap_reserves(
     provider: Arc<Provider<Ws>>,
-    chain: ChainId,
+    catalog: &[PoolCatalogEntry],
 ) -> Result<PoolRegistry> {
     let abi = parse_abi();
-    let configs = pool_catalog(chain);
 
     let current_block = provider
         .get_block_number()
@@ -140,7 +233,7 @@ pub async fn bootstrap_reserves(
 
     let registry = PoolRegistry::new();
 
-    for cfg in &configs {
+    for cfg in catalog {
         match cfg.dex_type {
             DexType::UniswapV2 => {
                 let (reserve0, reserve1) =
@@ -255,16 +348,16 @@ async fn fetch_curve_balance(provider: Arc<Provider<Ws>>, address: Address, i: u
 
 // ─── Sync event subscriptions ─────────────────────────────────────────────────
 
-/// Subscribes to Sync events for all V2 pools on the given chain.
+/// Subscribes to Sync/Swap/TokenExchange events for all pools in the catalog.
 /// Returns on stream end or error. Caller wraps in a reconnect loop.
 pub async fn run_subscriptions(
     provider: Arc<Provider<Ws>>,
     registry: PoolRegistry,
+    catalog: Arc<Vec<PoolCatalogEntry>>,
     chain: ChainId,
     arb_tx: tokio::sync::watch::Sender<()>,
 ) -> Result<()> {
-    let configs = pool_catalog(chain);
-    let pair_addresses: Vec<Address> = configs.iter().map(|c| c.pool_key.address).collect();
+    let pair_addresses: Vec<Address> = catalog.iter().map(|c| c.pool_key.address).collect();
     let sync_topic = H256::from(ethers::core::utils::keccak256("Sync(uint112,uint112)"));
     let swap_topic = H256::from(ethers::core::utils::keccak256(
         "Swap(address,address,int256,int256,uint160,uint128,int24)",
@@ -285,15 +378,15 @@ pub async fn run_subscriptions(
     while let Some(log) = stream.next().await {
         let handled = match log.topics.first().copied() {
             Some(t) if t == sync_topic => {
-                handle_sync_log(log, &registry, chain).await;
+                handle_sync_log(log, &registry, &catalog).await;
                 true
             }
             Some(t) if t == swap_topic => {
-                handle_swap_log(log, &registry, chain).await;
+                handle_swap_log(log, &registry, &catalog).await;
                 true
             }
             Some(t) if t == token_exchange_topic => {
-                handle_token_exchange_log(log, &registry, chain).await;
+                handle_token_exchange_log(log, &registry, &catalog).await;
                 true
             }
             _ => false,
@@ -306,7 +399,7 @@ pub async fn run_subscriptions(
     Err(eyre!("pool log stream ended unexpectedly"))
 }
 
-async fn handle_sync_log(log: Log, registry: &PoolRegistry, chain: ChainId) {
+async fn handle_sync_log(log: Log, registry: &PoolRegistry, catalog: &[PoolCatalogEntry]) {
     let address = log.address;
     let block_number = match log.block_number {
         Some(b) => b.as_u64(),
@@ -316,10 +409,7 @@ async fn handle_sync_log(log: Log, registry: &PoolRegistry, chain: ChainId) {
         }
     };
 
-    let entry: Option<PoolCatalogEntry> = pool_catalog(chain)
-        .into_iter()
-        .find(|c| c.pool_key.address == address);
-
+    let entry = catalog.iter().find(|c| c.pool_key.address == address);
     let Some(entry) = entry else {
         debug!(?address, "received Sync from unknown address");
         return;
@@ -346,7 +436,7 @@ async fn handle_sync_log(log: Log, registry: &PoolRegistry, chain: ChainId) {
         .await;
 }
 
-async fn handle_swap_log(log: Log, registry: &PoolRegistry, chain: ChainId) {
+async fn handle_swap_log(log: Log, registry: &PoolRegistry, catalog: &[PoolCatalogEntry]) {
     let address = log.address;
     let block_number = match log.block_number {
         Some(b) => b.as_u64(),
@@ -356,7 +446,7 @@ async fn handle_swap_log(log: Log, registry: &PoolRegistry, chain: ChainId) {
         }
     };
 
-    let entry = pool_catalog(chain).into_iter().find(|c| c.pool_key.address == address);
+    let entry = catalog.iter().find(|c| c.pool_key.address == address);
     let Some(entry) = entry else {
         debug!(?address, "received Swap from unknown address");
         return;
@@ -383,7 +473,11 @@ async fn handle_swap_log(log: Log, registry: &PoolRegistry, chain: ChainId) {
         .await;
 }
 
-async fn handle_token_exchange_log(log: Log, registry: &PoolRegistry, chain: ChainId) {
+async fn handle_token_exchange_log(
+    log: Log,
+    registry: &PoolRegistry,
+    catalog: &[PoolCatalogEntry],
+) {
     let address = log.address;
     let block_number = match log.block_number {
         Some(b) => b.as_u64(),
@@ -393,7 +487,7 @@ async fn handle_token_exchange_log(log: Log, registry: &PoolRegistry, chain: Cha
         }
     };
 
-    let entry = pool_catalog(chain).into_iter().find(|c| c.pool_key.address == address);
+    let entry = catalog.iter().find(|c| c.pool_key.address == address);
     let Some(entry) = entry else {
         debug!(?address, "received TokenExchange from unknown address");
         return;
@@ -434,13 +528,12 @@ const STALE_BLOCK_THRESHOLD: u64 = 50;
 pub async fn refresh_stale_pools(
     provider: Arc<Provider<Ws>>,
     registry: &PoolRegistry,
-    chain: ChainId,
+    catalog: &[PoolCatalogEntry],
     current_block: u64,
 ) {
     let abi = parse_abi();
-    let configs = pool_catalog(chain);
 
-    for cfg in &configs {
+    for cfg in catalog {
         let stale = registry
             .get(cfg.pool_key)
             .await
