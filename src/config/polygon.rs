@@ -1,7 +1,7 @@
 use ethers::types::Address;
 
 use crate::config::PoolCatalogEntry;
-use crate::types::{ArbPath, ChainId, DexType, PoolKey};
+use crate::types::{ArbPath, ChainId, DexType, HopSpec, PoolKey};
 
 fn addr(s: &str) -> Address {
     s.parse().expect("invalid address in polygon config")
@@ -40,17 +40,100 @@ pub fn weth_usdc_key() -> PoolKey {
 }
 
 // ─── Pool catalog ─────────────────────────────────────────────────────────────
-//
-// Pool addresses for Polygon have not been verified on-chain.
-// Add them back once correct addresses are confirmed via the QuickSwap factory.
+
 pub fn polygon_pools() -> Vec<PoolCatalogEntry> {
-    vec![]
+    vec![
+        PoolCatalogEntry {
+            pool_key: pool_key_weth_usdc(),
+            dex_type: DexType::UniswapV2,
+            expected_token0: usdc(), // USDC < WETH numerically
+            expected_token1: weth(),
+            token0_symbol: "USDC",
+            token1_symbol: "WETH",
+            name: "WETH/USDC QuickSwapV2",
+            fee_tier: 0,
+            n_coins: 0,
+        },
+        PoolCatalogEntry {
+            pool_key: pool_key_usdc_dai(),
+            dex_type: DexType::UniswapV2,
+            expected_token0: usdc(), // USDC < DAI numerically
+            expected_token1: dai(),
+            token0_symbol: "USDC",
+            token1_symbol: "DAI",
+            name: "USDC/DAI QuickSwapV2",
+            fee_tier: 0,
+            n_coins: 0,
+        },
+        PoolCatalogEntry {
+            pool_key: pool_key_weth_dai(),
+            dex_type: DexType::UniswapV2,
+            expected_token0: weth(), // WETH < DAI numerically
+            expected_token1: dai(),
+            token0_symbol: "WETH",
+            token1_symbol: "DAI",
+            name: "WETH/DAI QuickSwapV2",
+            fee_tier: 0,
+            n_coins: 0,
+        },
+    ]
 }
 
 // ─── Arb paths ────────────────────────────────────────────────────────────────
 
 pub fn polygon_arb_paths() -> Vec<ArbPath> {
-    vec![]
+    vec![
+        // WETH → USDC → DAI → WETH
+        ArbPath {
+            name: "WETH→USDC→DAI→WETH",
+            chain: ChainId::Polygon,
+            hops: vec![
+                HopSpec {
+                    pool_key: pool_key_weth_usdc(),
+                    dex_type: DexType::UniswapV2,
+                    token_in: weth(),
+                    token_out: usdc(),
+                },
+                HopSpec {
+                    pool_key: pool_key_usdc_dai(),
+                    dex_type: DexType::UniswapV2,
+                    token_in: usdc(),
+                    token_out: dai(),
+                },
+                HopSpec {
+                    pool_key: pool_key_weth_dai(),
+                    dex_type: DexType::UniswapV2,
+                    token_in: dai(),
+                    token_out: weth(),
+                },
+            ],
+        },
+        // WETH → DAI → USDC → WETH
+        ArbPath {
+            name: "WETH→DAI→USDC→WETH",
+            chain: ChainId::Polygon,
+            hops: vec![
+                HopSpec {
+                    pool_key: pool_key_weth_dai(),
+                    dex_type: DexType::UniswapV2,
+                    token_in: weth(),
+                    token_out: dai(),
+                },
+                HopSpec {
+                    pool_key: pool_key_usdc_dai(),
+                    dex_type: DexType::UniswapV2,
+                    token_in: dai(),
+                    token_out: usdc(),
+                },
+                HopSpec {
+                    pool_key: pool_key_weth_usdc(),
+                    dex_type: DexType::UniswapV2,
+                    token_in: usdc(),
+                    token_out: weth(),
+                },
+            ],
+        },
+    ]
 }
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
@@ -60,13 +143,34 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_polygon_catalog_empty() {
-        assert!(polygon_pools().is_empty());
+    fn test_polygon_catalog_has_three_entries() {
+        assert_eq!(polygon_pools().len(), 3);
     }
 
     #[test]
-    fn test_polygon_arb_paths_empty() {
-        assert!(polygon_arb_paths().is_empty());
+    fn test_polygon_arb_paths_has_two_entries() {
+        assert_eq!(polygon_arb_paths().len(), 2);
+    }
+
+    #[test]
+    fn test_polygon_arb_paths_each_have_three_hops() {
+        for path in polygon_arb_paths() {
+            assert_eq!(path.hops.len(), 3);
+        }
+    }
+
+    #[test]
+    fn test_polygon_arb_paths_chain_matches() {
+        for path in polygon_arb_paths() {
+            assert_eq!(path.chain, ChainId::Polygon);
+        }
+    }
+
+    #[test]
+    fn test_polygon_pool_keys_all_use_polygon_chain() {
+        for entry in polygon_pools() {
+            assert_eq!(entry.pool_key.chain, ChainId::Polygon);
+        }
     }
 
     #[test]

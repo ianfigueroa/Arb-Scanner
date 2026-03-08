@@ -53,7 +53,7 @@ mod tests {
 
     #[test]
     fn test_pool_catalog_ethereum_non_empty() {
-        // Ethereum always has verified pools. Base/Polygon pools are pending address verification.
+        // Ethereum, Base, and Polygon all have active pool catalogs. Arbitrum has 1 pool (price monitor only).
         assert!(!pool_catalog(ChainId::Ethereum).is_empty());
     }
 
