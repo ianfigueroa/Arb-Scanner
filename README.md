@@ -6,7 +6,7 @@ A scan-only arbitrage scanner that watches DEX pools across multiple chains and 
 
 ## What it does
 
-Every block, it runs triangular arb paths through pools on each chain you've configured and checks if selling WETH → stable → stable → WETH comes back with more than you started with after gas. When it finds one, it logs it. It also watches the WETH price across all active chains and alerts you if they drift apart by more than a configurable threshold.
+Every block, it runs triangular arb paths through pools on each chain you've configured and checks if selling WETH → stable → stable → WETH comes back with more than you started with after gas. When it finds one, it logs it and writes it to a local SQLite database. It also watches the WETH price across all active chains and alerts you if they drift apart by more than a configurable threshold.
 
 **Chains:** Ethereum, Arbitrum, Base, Polygon (any combination — just add the URLs)
 
@@ -17,6 +17,8 @@ Every block, it runs triangular arb paths through pools on each chain you've con
 - Polygon: QuickSwap V2
 
 **Input sizes scanned per path:** 0.1, 0.5, 1, 5, 10 ETH
+
+**Pool addresses** — Ethereum and Arbitrum use verified static addresses. Base (BaseSwap) and Polygon (QuickSwap) query their V2 factory contracts at startup via `getPair(tokenA, tokenB)` to derive the canonical pool address at runtime. This avoids stale hardcoded addresses failing token verification on startup.
 
 ---
 
@@ -99,7 +101,33 @@ Best opportunity:
   Gas cost:           $1.52
 Runtime:              3721.4s
 ======================
+
+=== Research Summary ===
+Top paths by frequency:
+  1.  WETH→USDC→DAI→WETH     42 hits
+  2.  WETH→DAI→USDC→WETH     31 hits
+
+Top paths by avg ROI:
+  1.  WETH→USDC→DAI→WETH     0.0023%
+
+Exported: arb_opportunities_1741400000.csv
+========================
 ```
+
+All sessions write to `arb_opportunities.db` (SQLite, created automatically). On exit it prints the top paths by count and ROI and exports a CSV with every opportunity found.
+
+**Analyze the data:**
+```bash
+pip install -r analysis/requirements.txt
+python analysis/analyze.py arb_opportunities.db
+```
+
+This prints rich summary tables and saves 5 charts to `analysis/output/`:
+- `roi_distribution.png` — histogram of ROI across all opportunities
+- `opportunities_timeline.png` — opportunities per hour, per chain
+- `path_frequency.png` — top 15 paths by hit count
+- `gas_vs_profit.png` — scatter of gas cost vs net profit
+- `weth_price.png` — WETH/USD price over time per chain
 
 ---
 
@@ -121,21 +149,32 @@ Runtime:              3721.4s
 src/
 ├── main.rs              entry point, spawns one task per chain + cross-chain monitor
 ├── types.rs             ChainId, DexType, PoolKey, PoolState, ArbPath, HopSpec
-├── pools.rs             PoolRegistry, on-chain verify, bootstrap, event subscriptions
+├── pools.rs             PoolRegistry, factory resolution, on-chain verify, bootstrap, subscriptions
 ├── arb.rs               path execution, gas estimation, scan loop
 ├── cross_chain.rs       spread calculation, WARN alert task
+├── db.rs                SQLite persistence (opportunities + price snapshots, CSV export)
 ├── config/
-│   ├── mod.rs           pool_catalog(), arb_paths(), weth_usdc_pool_info()
-│   ├── ethereum.rs      V2 + V3 pools, 6 arb paths
-│   ├── arbitrum.rs      SushiSwap V2 pools
-│   ├── base.rs          BaseSwap V2 pools
-│   └── polygon.rs       QuickSwap V2 pools
+│   ├── mod.rs           pool_catalog(), arb_paths(), weth_usdc_from_catalog()
+│   ├── ethereum.rs      V2 + V3 pools, 8 arb paths (static addresses, verified)
+│   ├── arbitrum.rs      SushiSwap V2 pool (price monitor only)
+│   ├── base.rs          BaseSwap V2 pools + factory address
+│   └── polygon.rs       QuickSwap V2 pools + factory address
 └── dex/
     ├── mod.rs           synchronous quote dispatch
     ├── v2.rs            constant-product AMM formula
     ├── v3.rs            sqrtPriceX96 approximate quote
     └── curve.rs         async get_dy (not wired into scan paths yet)
+
+analysis/
+├── analyze.py           rich tables + 5 matplotlib charts from arb_opportunities.db
+└── requirements.txt     pandas, matplotlib, seaborn, rich
 ```
+
+**What `pools.rs` does at startup for each chain:**
+
+1. For Ethereum and Arbitrum — reads static pool addresses from `config/` (already verified against mainnet)
+2. For Base and Polygon — calls `factory.getPair(tokenA, tokenB)` on-chain for each pool pair, gets the canonical address back from the factory, then builds the pool catalog with those real addresses
+3. For every chain — calls `token0()` and `token1()` on each pool address to confirm the expected tokens are there. If anything is wrong, that chain fails to start with a clear error rather than silently scanning wrong pools.
 
 ---
 
@@ -145,4 +184,4 @@ src/
 cargo test
 ```
 
-75 tests covering AMM math, V3 fixed-point arithmetic, freshness guards, cross-chain spread logic, config invariants, and dispatch routing.
+81 tests covering AMM math, V3 fixed-point arithmetic, freshness guards, cross-chain spread logic, config invariants, dispatch routing, and the SQLite DB layer.
