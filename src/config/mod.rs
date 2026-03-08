@@ -42,6 +42,19 @@ pub fn weth_usdc_pool_info(chain: ChainId) -> Option<(PoolKey, bool)> {
     }
 }
 
+/// Find the WETH/USDC pool in a runtime-resolved catalog and return (key, usdc_is_token0).
+///
+/// Used by the price helpers in main.rs after `resolve_pool_catalog` has been called.
+pub fn weth_usdc_from_catalog(catalog: &[PoolCatalogEntry]) -> Option<(PoolKey, bool)> {
+    catalog
+        .iter()
+        .find(|e| {
+            (e.token0_symbol == "WETH" && e.token1_symbol == "USDC")
+                || (e.token0_symbol == "USDC" && e.token1_symbol == "WETH")
+        })
+        .map(|e| (e.pool_key, e.token0_symbol == "USDC"))
+}
+
 // ─── Tests ────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
