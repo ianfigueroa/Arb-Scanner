@@ -30,6 +30,9 @@ pub fn usdc() -> Address {
 pub fn dai() -> Address {
     addr("0x6B175474E89094C44Da98b954EedeAC495271d0F")
 }
+pub fn usdt() -> Address {
+    addr("0xdAC17F958D2ee523a2206206994597C13D831ec7")
+}
 
 // ─── Pool keys ────────────────────────────────────────────────────────────────
 
@@ -57,11 +60,19 @@ pub fn pool_key_weth_usdc_v3_3000() -> PoolKey {
 pub fn pool_key_curve_3pool() -> PoolKey {
     PoolKey::new(ChainId::Ethereum, addr("0xbEbc44782C7dB0a1A60Cb6fe97d0b483032FF1C7"))
 }
+/// Uniswap V2 — WETH/USDT (token0=WETH, token1=USDT; 0xC02a < 0xdAC1)
+pub fn pool_key_weth_usdt() -> PoolKey {
+    PoolKey::new(ChainId::Ethereum, addr("0x0d4a11d5EEaaC28EC3F61d100daF4d40471f1852"))
+}
+/// Uniswap V2 — DAI/USDT (token0=DAI, token1=USDT; 0x6B17 < 0xdAC1)
+pub fn pool_key_dai_usdt() -> PoolKey {
+    PoolKey::new(ChainId::Ethereum, addr("0xB20bd5D04BE54f870D5C0d3ca85d82b34B836405"))
+}
 
 // ─── Pool catalog ─────────────────────────────────────────────────────────────
 //
 // Token address ordering (numerically):
-//   DAI  (0x6B17) < USDC (0xA0b8) < WETH (0xC02a)
+//   DAI  (0x6B17) < USDC (0xA0b8) < WETH (0xC02a) < USDT (0xdAC1)
 //
 // | Pool              | token0 | token1 | dex   | fee  | n_coins |
 // |-------------------|--------|--------|-------|------|---------|
@@ -71,6 +82,8 @@ pub fn pool_key_curve_3pool() -> PoolKey {
 // | WETH/USDC V3 500  | USDC   | WETH   | V3    | 500  | 0       |
 // | WETH/USDC V3 3000 | USDC   | WETH   | V3    | 3000 | 0       |
 // | Curve 3pool       | DAI    | USDC   | Curve | 0    | 3       |
+// | WETH/USDT V2      | WETH   | USDT   | V2    | 0    | 0       |
+// | DAI/USDT  V2      | DAI    | USDT   | V2    | 0    | 0       |
 pub fn ethereum_pools() -> Vec<PoolCatalogEntry> {
     vec![
         PoolCatalogEntry {
@@ -138,6 +151,28 @@ pub fn ethereum_pools() -> Vec<PoolCatalogEntry> {
             name: "Curve 3pool",
             fee_tier: 0,
             n_coins: 3,
+        },
+        PoolCatalogEntry {
+            pool_key: pool_key_weth_usdt(),
+            dex_type: DexType::UniswapV2,
+            expected_token0: weth(),
+            expected_token1: usdt(),
+            token0_symbol: "WETH",
+            token1_symbol: "USDT",
+            name: "WETH/USDT V2",
+            fee_tier: 0,
+            n_coins: 0,
+        },
+        PoolCatalogEntry {
+            pool_key: pool_key_dai_usdt(),
+            dex_type: DexType::UniswapV2,
+            expected_token0: dai(),
+            expected_token1: usdt(),
+            token0_symbol: "DAI",
+            token1_symbol: "USDT",
+            name: "DAI/USDT V2",
+            fee_tier: 0,
+            n_coins: 0,
         },
     ]
 }
@@ -296,57 +331,60 @@ pub fn ethereum_arb_paths() -> Vec<ArbPath> {
                 },
             ],
         },
-        // Curve: WETH → DAI (V2) → USDC (Curve 3pool DAI→USDC) → WETH (V2)
+        // V2-only: WETH → USDT → DAI → WETH
         ArbPath {
-            name: "WETH→DAI→USDC(Curve)→WETH",
+            name: "WETH→USDT→DAI→WETH",
             chain: ChainId::Ethereum,
             hops: vec![
                 HopSpec {
-                    pool_key: pool_key_dai_weth(),
+                    pool_key: pool_key_weth_usdt(),
                     dex_type: DexType::UniswapV2,
                     token_in: weth(),
+                    token_out: usdt(),
+                },
+                HopSpec {
+                    pool_key: pool_key_dai_usdt(),
+                    dex_type: DexType::UniswapV2,
+                    token_in: usdt(),
                     token_out: dai(),
                 },
                 HopSpec {
-                    pool_key: pool_key_curve_3pool(),
-                    dex_type: DexType::CurveStableswap,
-                    token_in: dai(),
-                    token_out: usdc(),
-                },
-                HopSpec {
-                    pool_key: pool_key_weth_usdc(),
+                    pool_key: pool_key_dai_weth(),
                     dex_type: DexType::UniswapV2,
-                    token_in: usdc(),
+                    token_in: dai(),
                     token_out: weth(),
                 },
             ],
         },
-        // Curve: WETH → USDC (V2) → DAI (Curve 3pool USDC→DAI) → WETH (V2)
+        // V2-only: WETH → DAI → USDT → WETH
         ArbPath {
-            name: "WETH→USDC→DAI(Curve)→WETH",
+            name: "WETH→DAI→USDT→WETH",
             chain: ChainId::Ethereum,
             hops: vec![
                 HopSpec {
-                    pool_key: pool_key_weth_usdc(),
+                    pool_key: pool_key_dai_weth(),
                     dex_type: DexType::UniswapV2,
                     token_in: weth(),
-                    token_out: usdc(),
-                },
-                HopSpec {
-                    pool_key: pool_key_curve_3pool(),
-                    dex_type: DexType::CurveStableswap,
-                    token_in: usdc(),
                     token_out: dai(),
                 },
                 HopSpec {
-                    pool_key: pool_key_dai_weth(),
+                    pool_key: pool_key_dai_usdt(),
                     dex_type: DexType::UniswapV2,
                     token_in: dai(),
+                    token_out: usdt(),
+                },
+                HopSpec {
+                    pool_key: pool_key_weth_usdt(),
+                    dex_type: DexType::UniswapV2,
+                    token_in: usdt(),
                     token_out: weth(),
                 },
             ],
         },
     ]
+    // NOTE: Curve arb paths are excluded. The synchronous scan loop cannot call
+    // curve_quote (async get_dy RPC call). Curve hops always return None from
+    // dex::quote(), so any path containing them would be silently skipped.
 }
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
@@ -356,8 +394,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_ethereum_catalog_has_six_entries() {
-        assert_eq!(ethereum_pools().len(), 6);
+    fn test_ethereum_catalog_has_eight_entries() {
+        assert_eq!(ethereum_pools().len(), 8);
     }
 
     #[test]
@@ -381,14 +419,6 @@ mod tests {
     #[test]
     fn test_ethereum_arb_paths_have_eight_entries() {
         assert_eq!(ethereum_arb_paths().len(), 8);
-    }
-
-    #[test]
-    fn test_ethereum_arb_paths_include_curve() {
-        let has_curve = ethereum_arb_paths()
-            .iter()
-            .any(|p| p.hops.iter().any(|h| h.dex_type == DexType::CurveStableswap));
-        assert!(has_curve, "at least one arb path should use CurveStableswap");
     }
 
     #[test]
