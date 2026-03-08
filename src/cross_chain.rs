@@ -2,7 +2,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use tokio::sync::RwLock;
-use tracing::info;
+use tracing::warn;
 
 use crate::types::ChainId;
 
@@ -59,7 +59,7 @@ pub async fn cross_chain_monitor(price_refs: Vec<(ChainId, PriceRef)>, threshold
                     .iter()
                     .map(|(c, p)| format!("{}=${:.2}", c.name(), p))
                     .collect();
-                info!(
+                warn!(
                     spread = format!("{:.4}%", spread),
                     "[CROSS-CHAIN ALERT] {}",
                     price_str.join(" ")

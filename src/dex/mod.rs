@@ -10,9 +10,9 @@ use crate::types::{DexType, PoolState};
 
 /// Compute an output quote for a single hop using pool state already in memory.
 ///
-/// Handles UniswapV2 (constant-product) and returns None for other types:
-/// - UniswapV3: requires tick/liquidity data added in Phase 4
-/// - CurveStableswap: requires async on-chain call via dex::curve::curve_quote
+/// Returns None for CurveStableswap: get_dy is an async RPC call and cannot
+/// be integrated into this synchronous path. Use dex::curve::curve_quote directly
+/// for out-of-band Curve quoting.
 pub fn quote(
     dex_type: DexType,
     state: &PoolState,
