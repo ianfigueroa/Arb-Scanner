@@ -39,6 +39,87 @@ pub fn weth_usdc_key() -> PoolKey {
     pool_key_weth_usdc()
 }
 
+/// QuickSwap V2 factory — used to resolve canonical pool addresses at runtime.
+pub fn factory() -> Address {
+    addr("0x5757371414417b8C6CAad45bAeF941aBc7d3Ab32")
+}
+
+// ─── Runtime-resolved catalog + paths ────────────────────────────────────────
+
+/// Build the pool catalog from factory-resolved pool addresses.
+pub fn polygon_pools_from_pairs(
+    weth_usdc: Address,
+    usdc_dai: Address,
+    weth_dai: Address,
+) -> Vec<PoolCatalogEntry> {
+    vec![
+        PoolCatalogEntry {
+            pool_key: PoolKey::new(ChainId::Polygon, weth_usdc),
+            dex_type: DexType::UniswapV2,
+            expected_token0: usdc(), // USDC < WETH numerically
+            expected_token1: weth(),
+            token0_symbol: "USDC",
+            token1_symbol: "WETH",
+            name: "WETH/USDC QuickSwapV2",
+            fee_tier: 0,
+            n_coins: 0,
+        },
+        PoolCatalogEntry {
+            pool_key: PoolKey::new(ChainId::Polygon, usdc_dai),
+            dex_type: DexType::UniswapV2,
+            expected_token0: usdc(), // USDC < DAI numerically
+            expected_token1: dai(),
+            token0_symbol: "USDC",
+            token1_symbol: "DAI",
+            name: "USDC/DAI QuickSwapV2",
+            fee_tier: 0,
+            n_coins: 0,
+        },
+        PoolCatalogEntry {
+            pool_key: PoolKey::new(ChainId::Polygon, weth_dai),
+            dex_type: DexType::UniswapV2,
+            expected_token0: weth(), // WETH < DAI numerically
+            expected_token1: dai(),
+            token0_symbol: "WETH",
+            token1_symbol: "DAI",
+            name: "WETH/DAI QuickSwapV2",
+            fee_tier: 0,
+            n_coins: 0,
+        },
+    ]
+}
+
+/// Build the arb paths from factory-resolved pool addresses.
+pub fn polygon_arb_paths_from_pairs(
+    weth_usdc: Address,
+    usdc_dai: Address,
+    weth_dai: Address,
+) -> Vec<ArbPath> {
+    let k_wu = PoolKey::new(ChainId::Polygon, weth_usdc);
+    let k_ud = PoolKey::new(ChainId::Polygon, usdc_dai);
+    let k_wd = PoolKey::new(ChainId::Polygon, weth_dai);
+    vec![
+        ArbPath {
+            name: "WETH→USDC→DAI→WETH",
+            chain: ChainId::Polygon,
+            hops: vec![
+                HopSpec { pool_key: k_wu, dex_type: DexType::UniswapV2, token_in: weth(), token_out: usdc() },
+                HopSpec { pool_key: k_ud, dex_type: DexType::UniswapV2, token_in: usdc(), token_out: dai() },
+                HopSpec { pool_key: k_wd, dex_type: DexType::UniswapV2, token_in: dai(), token_out: weth() },
+            ],
+        },
+        ArbPath {
+            name: "WETH→DAI→USDC→WETH",
+            chain: ChainId::Polygon,
+            hops: vec![
+                HopSpec { pool_key: k_wd, dex_type: DexType::UniswapV2, token_in: weth(), token_out: dai() },
+                HopSpec { pool_key: k_ud, dex_type: DexType::UniswapV2, token_in: dai(), token_out: usdc() },
+                HopSpec { pool_key: k_wu, dex_type: DexType::UniswapV2, token_in: usdc(), token_out: weth() },
+            ],
+        },
+    ]
+}
+
 // ─── Pool catalog ─────────────────────────────────────────────────────────────
 
 pub fn polygon_pools() -> Vec<PoolCatalogEntry> {
