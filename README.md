@@ -3,11 +3,11 @@
 [![CI](https://github.com/ianfigueroa/Arb-Scanner/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/ianfigueroa/Arb-Scanner/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-A read-only arbitrage scanner that watches DEX pools across multiple chains and logs price discrepancies worth studying. It does not execute trades: no keys, no bundles, no transaction submission. This is a research and monitoring tool for on-chain pricing.
+This is a read-only arbitrage scanner I built to watch DEX pricing across a few chains and log anything interesting. It does not execute trades, hold keys, build bundles, or try to act like a production MEV bot. The point is to monitor prices, test path logic, and keep the results in a local database I can inspect later.
 
 ## What It Does
 
-Every block, the scanner evaluates curated triangular paths such as `WETH -> USDC -> DAI -> WETH` on each enabled chain. When the estimated round trip is positive after gas, it logs the event and stores it in SQLite. It also records per-block WETH/USD reference prices and raises cross-chain spread alerts when prices drift beyond a configured threshold.
+Every block, the scanner checks a small set of triangular paths like `WETH -> USDC -> DAI -> WETH` on each enabled chain. If the estimated round trip is positive after gas, it logs the opportunity and stores it in SQLite. It also records WETH/USD reference prices per block and warns when those prices drift too far apart across chains.
 
 Supported chains:
 - Ethereum
@@ -28,7 +28,7 @@ Input sizes scanned per path:
 - `5`
 - `10` ETH
 
-Pool addressing:
+How pool addresses are handled:
 - Ethereum and Arbitrum use verified static pool addresses.
 - Base and Polygon resolve V2 pair addresses from their factory contracts at startup so the scanner uses canonical live pool addresses instead of stale hardcoded values.
 
@@ -70,7 +70,7 @@ pip install -r analysis/requirements.txt
 python analysis/analyze.py arb_opportunities.db
 ```
 
-By default, the analysis script selects the latest recorded session and writes charts into `analysis/output/<session_id>/`.
+By default, the analysis script looks at the latest recorded session and writes charts into `analysis/output/<session_id>/`.
 
 ## Reading The Logs
 
@@ -121,7 +121,7 @@ Runtime:              3721.4s
 ======================
 ```
 
-All runs write into `arb_opportunities.db`. The database is now session-aware:
+All runs write into `arb_opportunities.db`. The database is session-aware:
 - each scanner start creates a `sessions` row
 - `opportunities` rows are tagged with `session_id`
 - `price_snapshots` rows are tagged with `session_id`
@@ -163,13 +163,13 @@ Charts produced:
 - `gas_vs_profit.png`
 - `weth_price.png`
 
-`weth_price.png` is the chart that should correlate most directly with the live block logs, because both are based on `price_snapshots`.
+`weth_price.png` is the chart that should line up most closely with the live block logs, because both come from the same `price_snapshots` data.
 
-Example chart from a real live session captured on 2026-03-21:
+Real chart from a live session I ran on 2026-03-21:
 
-![Live WETH price chart from 2026-03-21 session](docs/live-weth-price-2026-03-21.png)
+![Live WETH price chart from 2026-03-21 session](docs/live-weth-price-2026-03-21-long-run.png)
 
-This image was generated from recorded session data in the scanner, not from fabricated sample values. That specific session recorded price snapshots across all four chains and zero profitable opportunities, so a live price chart is the most representative example.
+That image came from a real 15-minute run of the scanner. It recorded `4708` price snapshots across Ethereum, Arbitrum, Base, and Polygon, but it still found `0` profitable opportunities. Because of that, the price chart is the only analysis image from that run that is actually informative. The other four analysis images are still generated, but they only become useful once a session records real opportunities.
 
 ## Architecture
 
@@ -196,19 +196,19 @@ analysis/
 
 ## Design Tradeoffs
 
-- The scanner is read-only by design. That keeps scope honest and removes private-key and execution risk.
-- SQLite is used because it is simple to inspect locally and works well for iterative research runs.
-- Pool coverage is curated rather than exhaustive. That keeps startup and maintenance manageable, but it is not a full DEX search surface.
-- Uniswap V3 quoting uses marginal price from `sqrtPriceX96`, which is fast and useful for monitoring but not a full execution simulation.
-- The Python analysis layer is intentionally separate from the Rust runtime so post-run reporting stays easy to modify without touching the scanner core.
+- The scanner is read-only on purpose. That keeps the scope honest and avoids key-management and execution risk.
+- SQLite is good enough for this kind of local research workflow and easy to inspect by hand.
+- Pool coverage is curated, not exhaustive. That keeps the startup path manageable, but it is not a full market search surface.
+- The Uniswap V3 quote uses marginal price from `sqrtPriceX96`, which is useful for monitoring but not a full execution model.
+- The Python analysis layer is separate from the Rust runtime so I can change reporting without touching the scanner itself.
 
 ## Known Limitations
 
-- Positive ROI in logs is an estimate, not executable profit.
-- The scanner does not submit transactions or compete with real MEV searchers.
+- Positive ROI in the logs is an estimate, not guaranteed executable profit.
+- The scanner does not submit transactions or compete with real searchers.
 - V3 quotes do not model full price impact across liquidity ranges.
-- Historical sessions are preserved in one SQLite file; this is convenient, but not the right long-term storage format for high-volume research.
-- Observability is log-and-SQLite based. There is no metrics backend, dashboard service, or alert delivery outside the terminal yet.
+- Sessions are stored in one SQLite file, which is convenient locally but not a great long-term format for higher-volume research.
+- Observability is still pretty simple: logs and SQLite, no metrics backend or external alerting yet.
 
 ## Roadmap
 
