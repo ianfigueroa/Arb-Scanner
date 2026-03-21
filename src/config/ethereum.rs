@@ -38,35 +38,59 @@ pub fn usdt() -> Address {
 
 /// Uniswap V2 — WETH/USDC (token0=USDC, token1=WETH; 0xA0b8 < 0xC02a)
 pub fn pool_key_weth_usdc() -> PoolKey {
-    PoolKey::new(ChainId::Ethereum, addr("0xB4e16d0168e52d35CaCD2c6185b44281Ec28C9Dc"))
+    PoolKey::new(
+        ChainId::Ethereum,
+        addr("0xB4e16d0168e52d35CaCD2c6185b44281Ec28C9Dc"),
+    )
 }
 /// Uniswap V2 — USDC/DAI (token0=DAI, token1=USDC; 0x6B17 < 0xA0b8)
 pub fn pool_key_usdc_dai() -> PoolKey {
-    PoolKey::new(ChainId::Ethereum, addr("0xAE461cA67B15dc8dc81CE7615e0320dA1A9aB8D5"))
+    PoolKey::new(
+        ChainId::Ethereum,
+        addr("0xAE461cA67B15dc8dc81CE7615e0320dA1A9aB8D5"),
+    )
 }
 /// Uniswap V2 — DAI/WETH (token0=DAI, token1=WETH; 0x6B17 < 0xC02a)
 pub fn pool_key_dai_weth() -> PoolKey {
-    PoolKey::new(ChainId::Ethereum, addr("0xA478c2975Ab1Ea89e8196811F51A7B7Ade33eB11"))
+    PoolKey::new(
+        ChainId::Ethereum,
+        addr("0xA478c2975Ab1Ea89e8196811F51A7B7Ade33eB11"),
+    )
 }
 /// Uniswap V3 — WETH/USDC 0.05% (token0=USDC, token1=WETH)
 pub fn pool_key_weth_usdc_v3_500() -> PoolKey {
-    PoolKey::new(ChainId::Ethereum, addr("0x88e6A0c2dDD26FEEb64F039a2c41296FcB3f5640"))
+    PoolKey::new(
+        ChainId::Ethereum,
+        addr("0x88e6A0c2dDD26FEEb64F039a2c41296FcB3f5640"),
+    )
 }
 /// Uniswap V3 — WETH/USDC 0.3% (token0=USDC, token1=WETH)
 pub fn pool_key_weth_usdc_v3_3000() -> PoolKey {
-    PoolKey::new(ChainId::Ethereum, addr("0x8ad599c3A0ff1De082011EFDDc58f1908eb6e6D8"))
+    PoolKey::new(
+        ChainId::Ethereum,
+        addr("0x8ad599c3A0ff1De082011EFDDc58f1908eb6e6D8"),
+    )
 }
 /// Curve 3pool — DAI/USDC/USDT (coins: DAI=0, USDC=1, USDT=2)
 pub fn pool_key_curve_3pool() -> PoolKey {
-    PoolKey::new(ChainId::Ethereum, addr("0xbEbc44782C7dB0a1A60Cb6fe97d0b483032FF1C7"))
+    PoolKey::new(
+        ChainId::Ethereum,
+        addr("0xbEbc44782C7dB0a1A60Cb6fe97d0b483032FF1C7"),
+    )
 }
 /// Uniswap V2 — WETH/USDT (token0=WETH, token1=USDT; 0xC02a < 0xdAC1)
 pub fn pool_key_weth_usdt() -> PoolKey {
-    PoolKey::new(ChainId::Ethereum, addr("0x0d4a11d5EEaaC28EC3F61d100daF4d40471f1852"))
+    PoolKey::new(
+        ChainId::Ethereum,
+        addr("0x0d4a11d5EEaaC28EC3F61d100daF4d40471f1852"),
+    )
 }
 /// Uniswap V2 — DAI/USDT (token0=DAI, token1=USDT; 0x6B17 < 0xdAC1)
 pub fn pool_key_dai_usdt() -> PoolKey {
-    PoolKey::new(ChainId::Ethereum, addr("0xB20bd5D04BE54f870D5C0d3ca85d82b34B836405"))
+    PoolKey::new(
+        ChainId::Ethereum,
+        addr("0xB20bd5D04BE54f870D5C0d3ca85d82b34B836405"),
+    )
 }
 
 // ─── Pool catalog ─────────────────────────────────────────────────────────────
@@ -457,7 +481,11 @@ mod tests {
             .collect();
         assert_eq!(v3_entries.len(), 2);
         for e in &v3_entries {
-            assert!(e.fee_tier > 0, "V3 pool {} should have non-zero fee_tier", e.name);
+            assert!(
+                e.fee_tier > 0,
+                "V3 pool {} should have non-zero fee_tier",
+                e.name
+            );
         }
     }
 

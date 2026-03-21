@@ -26,8 +26,17 @@ mod tests {
 
     #[test]
     fn test_amm_out_zero_inputs_v2_module() {
-        assert_eq!(amm_out(U256::zero(), U256::from(1000u64), U256::from(1000u64)), None);
-        assert_eq!(amm_out(U256::from(100u64), U256::zero(), U256::from(1000u64)), None);
-        assert_eq!(amm_out(U256::from(100u64), U256::from(1000u64), U256::zero()), None);
+        assert_eq!(
+            amm_out(U256::zero(), U256::from(1000u64), U256::from(1000u64)),
+            None
+        );
+        assert_eq!(
+            amm_out(U256::from(100u64), U256::zero(), U256::from(1000u64)),
+            None
+        );
+        assert_eq!(
+            amm_out(U256::from(100u64), U256::from(1000u64), U256::zero()),
+            None
+        );
     }
 }

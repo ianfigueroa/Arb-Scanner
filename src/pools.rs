@@ -520,10 +520,7 @@ async fn handle_token_exchange_log(
         if sold_id >= n || bought_id >= n {
             warn!(
                 pool = entry.name,
-                sold_id,
-                bought_id,
-                n,
-                "coin index out of range"
+                sold_id, bought_id, n, "coin index out of range"
             );
             return;
         }

@@ -66,8 +66,12 @@ pub fn weth_usdc_from_catalog(catalog: &[PoolCatalogEntry]) -> Option<(PoolKey, 
 mod tests {
     use super::*;
 
-    const ALL_CHAINS: [ChainId; 4] =
-        [ChainId::Ethereum, ChainId::Arbitrum, ChainId::Base, ChainId::Polygon];
+    const ALL_CHAINS: [ChainId; 4] = [
+        ChainId::Ethereum,
+        ChainId::Arbitrum,
+        ChainId::Base,
+        ChainId::Polygon,
+    ];
 
     #[test]
     fn test_pool_catalog_ethereum_non_empty() {
@@ -93,9 +97,17 @@ mod tests {
         let unique: std::collections::HashSet<_> = pool_catalog(ChainId::Ethereum)
             .into_iter()
             .map(|e| e.pool_key)
-            .chain(pool_catalog(ChainId::Arbitrum).into_iter().map(|e| e.pool_key))
+            .chain(
+                pool_catalog(ChainId::Arbitrum)
+                    .into_iter()
+                    .map(|e| e.pool_key),
+            )
             .chain(pool_catalog(ChainId::Base).into_iter().map(|e| e.pool_key))
-            .chain(pool_catalog(ChainId::Polygon).into_iter().map(|e| e.pool_key))
+            .chain(
+                pool_catalog(ChainId::Polygon)
+                    .into_iter()
+                    .map(|e| e.pool_key),
+            )
             .collect();
         assert_eq!(
             unique.len(),

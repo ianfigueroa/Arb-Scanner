@@ -34,9 +34,13 @@ fn v2_dispatch(
     amount_in: U256,
 ) -> Option<U256> {
     let (reserve0, reserve1, token0, token1) = match state {
-        PoolState::V2 { reserve0, reserve1, token0, token1, .. } => {
-            (*reserve0, *reserve1, *token0, *token1)
-        }
+        PoolState::V2 {
+            reserve0,
+            reserve1,
+            token0,
+            token1,
+            ..
+        } => (*reserve0, *reserve1, *token0, *token1),
         _ => return None,
     };
     if token_in == token0 && token_out == token1 {
@@ -55,9 +59,13 @@ fn v3_dispatch(
     amount_in: U256,
 ) -> Option<U256> {
     let (sqrt_price_x96, fee_tier, token0, token1) = match state {
-        PoolState::V3 { sqrt_price_x96, fee_tier, token0, token1, .. } => {
-            (*sqrt_price_x96, *fee_tier, *token0, *token1)
-        }
+        PoolState::V3 {
+            sqrt_price_x96,
+            fee_tier,
+            token0,
+            token1,
+            ..
+        } => (*sqrt_price_x96, *fee_tier, *token0, *token1),
         _ => return None,
     };
     // zero_for_one=false: token0→token1 (multiply by price)
@@ -97,21 +105,45 @@ mod tests {
     #[test]
     fn test_quote_v2_forward() {
         let state = make_v2_state(1000, 2000, 1, 2);
-        let out = quote(DexType::UniswapV2, &state, test_addr(1), test_addr(2), U256::from(100u64));
-        assert_eq!(out, v2::amm_out(U256::from(100u64), U256::from(1000u64), U256::from(2000u64)));
+        let out = quote(
+            DexType::UniswapV2,
+            &state,
+            test_addr(1),
+            test_addr(2),
+            U256::from(100u64),
+        );
+        assert_eq!(
+            out,
+            v2::amm_out(U256::from(100u64), U256::from(1000u64), U256::from(2000u64))
+        );
     }
 
     #[test]
     fn test_quote_v2_reverse() {
         let state = make_v2_state(1000, 2000, 1, 2);
-        let out = quote(DexType::UniswapV2, &state, test_addr(2), test_addr(1), U256::from(100u64));
-        assert_eq!(out, v2::amm_out(U256::from(100u64), U256::from(2000u64), U256::from(1000u64)));
+        let out = quote(
+            DexType::UniswapV2,
+            &state,
+            test_addr(2),
+            test_addr(1),
+            U256::from(100u64),
+        );
+        assert_eq!(
+            out,
+            v2::amm_out(U256::from(100u64), U256::from(2000u64), U256::from(1000u64))
+        );
     }
 
     #[test]
     fn test_quote_v2_wrong_tokens() {
         let state = make_v2_state(1000, 2000, 1, 2);
-        let out = quote(DexType::UniswapV2, &state, test_addr(3), test_addr(1), U256::from(100u64));
+        let out = quote(
+            DexType::UniswapV2,
+            &state,
+            test_addr(3),
+            test_addr(1),
+            U256::from(100u64),
+        );
         assert!(out.is_none());
     }
 
@@ -124,14 +156,26 @@ mod tests {
             token1: test_addr(2),
             last_block: 100,
         };
-        let out = quote(DexType::UniswapV2, &state, test_addr(1), test_addr(2), U256::from(100u64));
+        let out = quote(
+            DexType::UniswapV2,
+            &state,
+            test_addr(1),
+            test_addr(2),
+            U256::from(100u64),
+        );
         assert!(out.is_none());
     }
 
     #[test]
     fn test_quote_curve_returns_none() {
         let state = make_v2_state(1000, 2000, 1, 2);
-        let out = quote(DexType::CurveStableswap, &state, test_addr(1), test_addr(2), U256::from(100u64));
+        let out = quote(
+            DexType::CurveStableswap,
+            &state,
+            test_addr(1),
+            test_addr(2),
+            U256::from(100u64),
+        );
         assert!(out.is_none());
     }
 
@@ -147,14 +191,26 @@ mod tests {
             token1: test_addr(2),
             last_block: 100,
         };
-        let out = quote(DexType::UniswapV3, &state, test_addr(1), test_addr(2), U256::from(100u64));
+        let out = quote(
+            DexType::UniswapV3,
+            &state,
+            test_addr(1),
+            test_addr(2),
+            U256::from(100u64),
+        );
         assert_eq!(out, Some(U256::from(399u64)));
     }
 
     #[test]
     fn test_quote_v3_wrong_state_type() {
         let state = make_v2_state(1000, 2000, 1, 2);
-        let out = quote(DexType::UniswapV3, &state, test_addr(1), test_addr(2), U256::from(100u64));
+        let out = quote(
+            DexType::UniswapV3,
+            &state,
+            test_addr(1),
+            test_addr(2),
+            U256::from(100u64),
+        );
         assert!(out.is_none());
     }
 
@@ -167,8 +223,13 @@ mod tests {
             token1: test_addr(2),
             last_block: 100,
         };
-        let out = quote(DexType::UniswapV3, &state, test_addr(3), test_addr(1), U256::from(100u64));
+        let out = quote(
+            DexType::UniswapV3,
+            &state,
+            test_addr(3),
+            test_addr(1),
+            U256::from(100u64),
+        );
         assert!(out.is_none());
     }
-
 }

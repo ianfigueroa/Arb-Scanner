@@ -97,12 +97,18 @@ mod tests {
 
     #[test]
     fn test_approx_out_v3_zero_sqrt_price() {
-        assert_eq!(approx_out_v3(U256::from(100u64), U256::zero(), 500, false), None);
+        assert_eq!(
+            approx_out_v3(U256::from(100u64), U256::zero(), 500, false),
+            None
+        );
     }
 
     #[test]
     fn test_approx_out_v3_invalid_fee_tier() {
-        assert_eq!(approx_out_v3(U256::from(100u64), sqrt_price(2), 1_000_000, false), None);
+        assert_eq!(
+            approx_out_v3(U256::from(100u64), sqrt_price(2), 1_000_000, false),
+            None
+        );
     }
 
     #[test]

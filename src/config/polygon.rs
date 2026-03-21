@@ -23,15 +23,24 @@ pub fn dai() -> Address {
 
 /// QuickSwap V2 — WETH/USDC (token0=USDC, token1=WETH; 0x2791 < 0x7ceB)
 pub fn pool_key_weth_usdc() -> PoolKey {
-    PoolKey::new(ChainId::Polygon, addr("0x853Ee4b2A13f8a742d64C8F088bE7bA2131f670d"))
+    PoolKey::new(
+        ChainId::Polygon,
+        addr("0x853Ee4b2A13f8a742d64C8F088bE7bA2131f670d"),
+    )
 }
 /// QuickSwap V2 — USDC/DAI (token0=USDC, token1=DAI; 0x2791 < 0x8f3C)
 pub fn pool_key_usdc_dai() -> PoolKey {
-    PoolKey::new(ChainId::Polygon, addr("0xf04adBF75cDFc5eD26eeA4bbbb991DB002036Bdd"))
+    PoolKey::new(
+        ChainId::Polygon,
+        addr("0xf04adBF75cDFc5eD26eeA4bbbb991DB002036Bdd"),
+    )
 }
 /// QuickSwap V2 — WETH/DAI (token0=WETH, token1=DAI; 0x7ceB < 0x8f3C)
 pub fn pool_key_weth_dai() -> PoolKey {
-    PoolKey::new(ChainId::Polygon, addr("0x4A35582a710E1F4b2030A3F826DA20BfB6703C09"))
+    PoolKey::new(
+        ChainId::Polygon,
+        addr("0x4A35582a710E1F4b2030A3F826DA20BfB6703C09"),
+    )
 }
 
 /// Primary WETH/stable pair used for price display and cross-chain monitoring.
@@ -104,18 +113,48 @@ pub fn polygon_arb_paths_from_pairs(
             name: "WETH→USDC→DAI→WETH",
             chain: ChainId::Polygon,
             hops: vec![
-                HopSpec { pool_key: k_wu, dex_type: DexType::UniswapV2, token_in: weth(), token_out: usdc() },
-                HopSpec { pool_key: k_ud, dex_type: DexType::UniswapV2, token_in: usdc(), token_out: dai() },
-                HopSpec { pool_key: k_wd, dex_type: DexType::UniswapV2, token_in: dai(), token_out: weth() },
+                HopSpec {
+                    pool_key: k_wu,
+                    dex_type: DexType::UniswapV2,
+                    token_in: weth(),
+                    token_out: usdc(),
+                },
+                HopSpec {
+                    pool_key: k_ud,
+                    dex_type: DexType::UniswapV2,
+                    token_in: usdc(),
+                    token_out: dai(),
+                },
+                HopSpec {
+                    pool_key: k_wd,
+                    dex_type: DexType::UniswapV2,
+                    token_in: dai(),
+                    token_out: weth(),
+                },
             ],
         },
         ArbPath {
             name: "WETH→DAI→USDC→WETH",
             chain: ChainId::Polygon,
             hops: vec![
-                HopSpec { pool_key: k_wd, dex_type: DexType::UniswapV2, token_in: weth(), token_out: dai() },
-                HopSpec { pool_key: k_ud, dex_type: DexType::UniswapV2, token_in: dai(), token_out: usdc() },
-                HopSpec { pool_key: k_wu, dex_type: DexType::UniswapV2, token_in: usdc(), token_out: weth() },
+                HopSpec {
+                    pool_key: k_wd,
+                    dex_type: DexType::UniswapV2,
+                    token_in: weth(),
+                    token_out: dai(),
+                },
+                HopSpec {
+                    pool_key: k_ud,
+                    dex_type: DexType::UniswapV2,
+                    token_in: dai(),
+                    token_out: usdc(),
+                },
+                HopSpec {
+                    pool_key: k_wu,
+                    dex_type: DexType::UniswapV2,
+                    token_in: usdc(),
+                    token_out: weth(),
+                },
             ],
         },
     ]

@@ -20,7 +20,10 @@ pub fn usdc_e() -> Address {
 
 /// SushiSwap V2 — WETH/USDC.e (token0=WETH, token1=USDC.e; 0x82aF < 0xFF97)
 pub fn pool_key_weth_usdc_e() -> PoolKey {
-    PoolKey::new(ChainId::Arbitrum, addr("0x905dfCD5649217c42684f23958568e533C711Aa3"))
+    PoolKey::new(
+        ChainId::Arbitrum,
+        addr("0x905dfCD5649217c42684f23958568e533C711Aa3"),
+    )
 }
 
 /// Primary WETH/stable pair used for price display and cross-chain monitoring.
@@ -35,19 +38,17 @@ pub fn weth_usdc_key() -> PoolKey {
 // with a verified on-chain address. Additional pairs (USDT, etc.) had bad
 // addresses and were removed. Add them back once correct addresses are confirmed.
 pub fn arbitrum_pools() -> Vec<PoolCatalogEntry> {
-    vec![
-        PoolCatalogEntry {
-            pool_key: pool_key_weth_usdc_e(),
-            dex_type: DexType::UniswapV2,
-            expected_token0: weth(),
-            expected_token1: usdc_e(),
-            token0_symbol: "WETH",
-            token1_symbol: "USDC.e",
-            name: "WETH/USDC.e SushiV2",
-            fee_tier: 0,
-            n_coins: 0,
-        },
-    ]
+    vec![PoolCatalogEntry {
+        pool_key: pool_key_weth_usdc_e(),
+        dex_type: DexType::UniswapV2,
+        expected_token0: weth(),
+        expected_token1: usdc_e(),
+        token0_symbol: "WETH",
+        token1_symbol: "USDC.e",
+        name: "WETH/USDC.e SushiV2",
+        fee_tier: 0,
+        n_coins: 0,
+    }]
 }
 
 // ─── Arb paths ────────────────────────────────────────────────────────────────

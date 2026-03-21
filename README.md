@@ -3,187 +3,220 @@
 [![CI](https://github.com/ianfigueroa/Arb-Scanner/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/ianfigueroa/Arb-Scanner/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-A read-only arbitrage scanner that watches DEX pools across multiple chains and logs when it spots a price discrepancy worth noting. It does not execute anything: no private keys, no transactions, no bundles. It is a research and monitoring tool for on-chain pricing, not a trading engine.
+A read-only arbitrage scanner that watches DEX pools across multiple chains and logs price discrepancies worth studying. It does not execute trades: no keys, no bundles, no transaction submission. This is a research and monitoring tool for on-chain pricing.
 
----
+## What It Does
 
-## What it does
+Every block, the scanner evaluates curated triangular paths such as `WETH -> USDC -> DAI -> WETH` on each enabled chain. When the estimated round trip is positive after gas, it logs the event and stores it in SQLite. It also records per-block WETH/USD reference prices and raises cross-chain spread alerts when prices drift beyond a configured threshold.
 
-Every block, it runs triangular arb paths through pools on each chain you've configured and checks if selling WETH → stable → stable → WETH comes back with more than you started with after gas. When it finds one, it logs it and writes it to a local SQLite database. It also watches the WETH price across all active chains and alerts you if they drift apart by more than a configurable threshold.
+Supported chains:
+- Ethereum
+- Arbitrum
+- Base
+- Polygon
 
-**Chains:** Ethereum, Arbitrum, Base, Polygon (any combination — just add the URLs)
-
-**DEXes:**
-- Ethereum: Uniswap V2, Uniswap V3 (0.05% and 0.3% pools)
+Supported venues:
+- Ethereum: Uniswap V2, Uniswap V3 0.05%, Uniswap V3 0.3%, Curve 3pool for pricing context
 - Arbitrum: SushiSwap V2
 - Base: BaseSwap V2
 - Polygon: QuickSwap V2
 
-**Input sizes scanned per path:** 0.1, 0.5, 1, 5, 10 ETH
+Input sizes scanned per path:
+- `0.1`
+- `0.5`
+- `1`
+- `5`
+- `10` ETH
 
-**Pool addresses** — Ethereum and Arbitrum use verified static addresses. Base (BaseSwap) and Polygon (QuickSwap) query their V2 factory contracts at startup via `getPair(tokenA, tokenB)` to derive the canonical pool address at runtime. This avoids stale hardcoded addresses failing token verification on startup.
+Pool addressing:
+- Ethereum and Arbitrum use verified static pool addresses.
+- Base and Polygon resolve V2 pair addresses from their factory contracts at startup so the scanner uses canonical live pool addresses instead of stale hardcoded values.
 
----
+## Quick Start
 
-## Setup
-
-### 1. Get free RPC keys from Alchemy
-
-Go to [alchemy.com](https://www.alchemy.com), make a free account, and create apps for whichever chains you want to run. Each app gives you a WebSocket URL that looks like:
-
-```
-wss://eth-mainnet.g.alchemy.com/v2/YOUR_KEY
-```
-
-You only need the chains you care about. If you just want Ethereum, one key is enough.
-
-### 2. Configure
+### 1. Copy the environment file
 
 ```bash
 cp .env.example .env
 ```
 
-Then open `.env` and paste in your URLs:
+### 2. Add at least one WebSocket RPC URL
 
-```
-ETH_WS_URL=wss://eth-mainnet.g.alchemy.com/v2/abc123
-ARBITRUM_WS_URL=wss://arb-mainnet.g.alchemy.com/v2/abc123
-BASE_WS_URL=wss://base-mainnet.g.alchemy.com/v2/abc123
-POLYGON_WS_URL=wss://polygon-mainnet.g.alchemy.com/v2/abc123
+Example:
+
+```dotenv
+ETH_WS_URL=wss://eth-mainnet.g.alchemy.com/v2/your_key
+ARBITRUM_WS_URL=wss://arb-mainnet.g.alchemy.com/v2/your_key
+BASE_WS_URL=wss://base-mainnet.g.alchemy.com/v2/your_key
+POLYGON_WS_URL=wss://polygon-mainnet.g.alchemy.com/v2/your_key
 
 CROSS_CHAIN_THRESHOLD_PCT=0.1
 ```
 
-Any chain without a URL is skipped automatically — you don't need all four.
+Any chain without a URL is skipped automatically.
 
-### 3. Run
+### 3. Run the scanner
 
 ```bash
 cargo run
 ```
 
-Hit **Ctrl+C** to stop and print a session summary.
+Stop it with `Ctrl+C`.
 
----
+### 4. Analyze the latest session
 
-## Reading the logs
-
-**Startup** — verifies pool token ordering on-chain and loads initial reserves:
-```
-INFO pool token orderings verified  chain=ethereum
-INFO reserves bootstrapped          chain=ethereum
-INFO subscribed to pool events      chain=ethereum
-```
-
-**Every block** — one line per chain with current WETH price and gas:
-```
-INFO chain=ethereum block=21000000 gas_gwei="12.34" WETH: $3412.50
-INFO chain=arbitrum block=21000001 gas_gwei="0.11"  WETH: $3415.20
-```
-
-**Opportunity found:**
-```
-INFO [OPPORTUNITY] chain=ethereum path="WETH→USDC→DAI→WETH" roi_pct="0.0023" gas_cost_usd="1.40"
-```
-
-**Cross-chain price spread alert:**
-```
-WARN [CROSS-CHAIN ALERT] spread="0.42%" ethereum=$3412.50 arbitrum=$3426.90
-```
-
-**Session summary on exit:**
-```
-=== Session Summary ===
-Blocks scanned:       312
-Opportunities found:  7
-Best opportunity:
-  Chain:              ethereum
-  Path:               WETH→USDC→DAI→WETH V3-500
-  Input:              1.0000 ETH
-  ROI:                0.0031%
-  Gas cost:           $1.52
-Runtime:              3721.4s
-======================
-
-=== Research Summary ===
-Top paths by frequency:
-  1.  WETH→USDC→DAI→WETH     42 hits
-  2.  WETH→DAI→USDC→WETH     31 hits
-
-Top paths by avg ROI:
-  1.  WETH→USDC→DAI→WETH     0.0023%
-
-Exported: arb_opportunities_1741400000.csv
-========================
-```
-
-All sessions write to `arb_opportunities.db` (SQLite, created automatically). On exit it prints the top paths by count and ROI and exports a CSV with every opportunity found.
-
-**Analyze the data:**
 ```bash
 pip install -r analysis/requirements.txt
 python analysis/analyze.py arb_opportunities.db
 ```
 
-This prints rich summary tables and saves 5 charts to `analysis/output/`:
-- `roi_distribution.png` — histogram of ROI across all opportunities
-- `opportunities_timeline.png` — opportunities per hour, per chain
-- `path_frequency.png` — top 15 paths by hit count
-- `gas_vs_profit.png` — scatter of gas cost vs net profit
-- `weth_price.png` — WETH/USD price over time per chain
+By default, the analysis script selects the latest recorded session and writes charts into `analysis/output/<session_id>/`.
 
-Example chart from a sample run:
+## Reading The Logs
+
+Startup:
+
+```text
+INFO arb_bot: database opened path="arb_opportunities.db"
+INFO arb_bot: session started session_id="session-1761332485123" active_chains="ethereum,arbitrum,base,polygon"
+INFO arb_bot: pool catalog resolved chain="ethereum" pools=8
+INFO arb_bot: reserves bootstrapped chain="ethereum"
+INFO arb_bot::pools: subscribed to pool events chain="ethereum"
+```
+
+Per block:
+
+```text
+INFO arb_bot: WETH: $2150.50 chain="ethereum" block=24708245 gas_gwei="0.04"
+INFO arb_bot: WETH: $2149.38 chain="arbitrum" block=444231730 gas_gwei="0.02"
+```
+
+Cross-chain alert:
+
+```text
+WARN arb_bot::cross_chain: [CROSS-CHAIN ALERT] ethereum=$2150.50 arbitrum=$2149.38 base=$2154.28 spread="0.2281%"
+```
+
+Opportunity log:
+
+```text
+INFO arb_bot: [OPPORTUNITY] chain="ethereum" path="WETH→USDC→DAI→WETH" roi_pct="0.0023" gas_cost_usd="1.40"
+```
+
+Shutdown summary:
+
+```text
+=== Session Summary ===
+Session ID:           session-1761332485123
+Blocks scanned:       312
+Opportunities found:  7
+Best opportunity:
+  Chain:                ethereum
+  Path:                 WETH→USDC→DAI→WETH
+  Input:                1.0000 ETH
+  Estimated net (wei):  1234567890000000
+  ROI:                  0.0031%
+  Gas cost:             $1.52
+Runtime:              3721.4s
+======================
+```
+
+All runs write into `arb_opportunities.db`. The database is now session-aware:
+- each scanner start creates a `sessions` row
+- `opportunities` rows are tagged with `session_id`
+- `price_snapshots` rows are tagged with `session_id`
+
+## Session-Based Analysis
+
+Analyze the latest session:
+
+```bash
+python analysis/analyze.py arb_opportunities.db
+```
+
+Analyze one specific session:
+
+```bash
+python analysis/analyze.py arb_opportunities.db --session session-1761332485123
+```
+
+List available sessions:
+
+```bash
+python analysis/analyze.py arb_opportunities.db --list-sessions
+```
+
+Analyze the full historical database instead of one session:
+
+```bash
+python analysis/analyze.py arb_opportunities.db --all
+```
+
+Output locations:
+- latest or explicit session: `analysis/output/<session_id>/`
+- aggregate mode: `analysis/output/all/`
+
+Charts produced:
+- `roi_distribution.png`
+- `opportunities_timeline.png`
+- `path_frequency.png`
+- `gas_vs_profit.png`
+- `weth_price.png`
+
+`weth_price.png` is the chart that should correlate most directly with the live block logs, because both are based on `price_snapshots`.
+
+Sample chart from example data:
 
 ![ROI distribution example](docs/example-roi-distribution.png)
 
----
-
-## Honest caveats
-
-**The numbers are estimates, not guarantees.** The V3 quote uses marginal price (sqrtPriceX96) which ignores price impact. V2 uses the constant-product formula which is more accurate but still doesn't account for other transactions in the same block changing the reserves before yours lands.
-
-**Seeing an opportunity doesn't mean you can capture it.** MEV searchers are doing the same math faster, with better tooling, and submitting bundles directly to validators. A positive `roi_pct` is a signal worth watching, not a confirmed profit.
-
-**This is read-only.** No signing key, no transaction builder, no execution.
-
-**ethers-rs 2.x is in maintenance mode.** Works fine for this use case. If you want to build on top of this seriously, migrating to [alloy-rs](https://github.com/alloy-rs/alloy) is the right call.
-
----
+This sample image is documentation-only. It is not proof of live profitability from your current database.
 
 ## Architecture
 
-```
+High-level component notes live in [docs/architecture.md](docs/architecture.md).
+
+Code layout:
+
+```text
 src/
-├── main.rs              entry point, spawns one task per chain + cross-chain monitor
-├── types.rs             ChainId, DexType, PoolKey, PoolState, ArbPath, HopSpec
-├── pools.rs             PoolRegistry, factory resolution, on-chain verify, bootstrap, subscriptions
-├── arb.rs               path execution, gas estimation, scan loop
-├── cross_chain.rs       spread calculation, WARN alert task
-├── db.rs                SQLite persistence (opportunities + price snapshots, CSV export)
+├── main.rs
+├── types.rs
+├── pools.rs
+├── arb.rs
+├── cross_chain.rs
+├── db.rs
 ├── config/
-│   ├── mod.rs           pool_catalog(), arb_paths(), weth_usdc_from_catalog()
-│   ├── ethereum.rs      V2 + V3 pools, 8 arb paths (static addresses, verified)
-│   ├── arbitrum.rs      SushiSwap V2 pool (price monitor only)
-│   ├── base.rs          BaseSwap V2 pools + factory address
-│   └── polygon.rs       QuickSwap V2 pools + factory address
 └── dex/
-    ├── mod.rs           synchronous quote dispatch
-    ├── v2.rs            constant-product AMM formula
-    ├── v3.rs            sqrtPriceX96 approximate quote
-    └── curve.rs         async get_dy (not wired into scan paths yet)
 
 analysis/
-├── analyze.py           rich tables + 5 matplotlib charts from arb_opportunities.db
-└── requirements.txt     pandas, matplotlib, seaborn, rich
+├── analyze.py
+├── requirements.txt
+└── test_analyze.py
 ```
 
-**What `pools.rs` does at startup for each chain:**
+## Design Tradeoffs
 
-1. For Ethereum and Arbitrum — reads static pool addresses from `config/` (already verified against mainnet)
-2. For Base and Polygon — calls `factory.getPair(tokenA, tokenB)` on-chain for each pool pair, gets the canonical address back from the factory, then builds the pool catalog with those real addresses
-3. For every chain — calls `token0()` and `token1()` on each pool address to confirm the expected tokens are there. If anything is wrong, that chain fails to start with a clear error rather than silently scanning wrong pools.
+- The scanner is read-only by design. That keeps scope honest and removes private-key and execution risk.
+- SQLite is used because it is simple to inspect locally and works well for iterative research runs.
+- Pool coverage is curated rather than exhaustive. That keeps startup and maintenance manageable, but it is not a full DEX search surface.
+- Uniswap V3 quoting uses marginal price from `sqrtPriceX96`, which is fast and useful for monitoring but not a full execution simulation.
+- The Python analysis layer is intentionally separate from the Rust runtime so post-run reporting stays easy to modify without touching the scanner core.
 
----
+## Known Limitations
+
+- Positive ROI in logs is an estimate, not executable profit.
+- The scanner does not submit transactions or compete with real MEV searchers.
+- V3 quotes do not model full price impact across liquidity ranges.
+- Historical sessions are preserved in one SQLite file; this is convenient, but not the right long-term storage format for high-volume research.
+- Observability is log-and-SQLite based. There is no metrics backend, dashboard service, or alert delivery outside the terminal yet.
+
+## Roadmap
+
+- Add explicit session filtering and comparison views to the Python charts.
+- Add better observability, including structured metrics and richer stale-pool diagnostics.
+- Expand path coverage and improve quote accuracy for deeper research runs.
+- Evaluate an `alloy-rs` migration if the runtime grows beyond the current `ethers-rs` footprint.
+- Cut formal GitHub releases starting with `v0.1.0`.
 
 ## Tests
 
@@ -194,4 +227,6 @@ cargo test
 python -m unittest analysis.test_analyze
 ```
 
-Verified locally: 83 Rust tests and 3 Python tests covering AMM math, V3 fixed-point arithmetic, freshness guards, cross-chain spread logic, config invariants, dispatch routing, the SQLite DB layer, and analysis schema handling.
+Verified locally:
+- `cargo test`: 85 passing tests
+- `python -m unittest analysis.test_analyze`: 7 passing tests

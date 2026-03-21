@@ -19,10 +19,7 @@ pub fn compute_spread_pct(prices: &[(ChainId, f64)]) -> Option<f64> {
     if prices.len() < 2 {
         return None;
     }
-    let min = prices
-        .iter()
-        .map(|(_, p)| *p)
-        .fold(f64::INFINITY, f64::min);
+    let min = prices.iter().map(|(_, p)| *p).fold(f64::INFINITY, f64::min);
     let max = prices
         .iter()
         .map(|(_, p)| *p)
@@ -88,30 +85,21 @@ mod tests {
 
     #[test]
     fn test_spread_zero_when_prices_equal() {
-        let prices = vec![
-            (ChainId::Ethereum, 3000.0),
-            (ChainId::Arbitrum, 3000.0),
-        ];
+        let prices = vec![(ChainId::Ethereum, 3000.0), (ChainId::Arbitrum, 3000.0)];
         assert_eq!(compute_spread_pct(&prices), Some(0.0));
     }
 
     #[test]
     fn test_spread_computed_correctly() {
         // (3012 - 3000) / 3000 * 100 = 0.4%
-        let prices = vec![
-            (ChainId::Ethereum, 3000.0),
-            (ChainId::Arbitrum, 3012.0),
-        ];
+        let prices = vec![(ChainId::Ethereum, 3000.0), (ChainId::Arbitrum, 3012.0)];
         let spread = compute_spread_pct(&prices).unwrap();
         assert!((spread - 0.4).abs() < 1e-9);
     }
 
     #[test]
     fn test_spread_alert_fires_above_threshold() {
-        let prices = vec![
-            (ChainId::Ethereum, 3000.0),
-            (ChainId::Arbitrum, 3012.0),
-        ];
+        let prices = vec![(ChainId::Ethereum, 3000.0), (ChainId::Arbitrum, 3012.0)];
         let spread = compute_spread_pct(&prices).unwrap();
         // threshold 0.1% — spread 0.4% should exceed it
         assert!(spread > 0.1);
@@ -120,10 +108,7 @@ mod tests {
     #[test]
     fn test_spread_no_alert_below_threshold() {
         // 0.05% spread should not exceed 0.1% threshold
-        let prices = vec![
-            (ChainId::Ethereum, 3000.0),
-            (ChainId::Arbitrum, 3001.5),
-        ];
+        let prices = vec![(ChainId::Ethereum, 3000.0), (ChainId::Arbitrum, 3001.5)];
         let spread = compute_spread_pct(&prices).unwrap();
         assert!(spread < 0.1);
     }
@@ -143,10 +128,7 @@ mod tests {
 
     #[test]
     fn test_spread_none_when_min_is_zero() {
-        let prices = vec![
-            (ChainId::Ethereum, 0.0),
-            (ChainId::Arbitrum, 3000.0),
-        ];
+        let prices = vec![(ChainId::Ethereum, 0.0), (ChainId::Arbitrum, 3000.0)];
         assert!(compute_spread_pct(&prices).is_none());
     }
 }

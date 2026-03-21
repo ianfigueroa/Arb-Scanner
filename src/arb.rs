@@ -31,9 +31,7 @@ fn path_is_fresh(pools: &HashMap<PoolKey, PoolState>, path: &ArbPath, current_bl
         if age > MAX_STALE_BLOCKS {
             warn!(
                 last_block = state.last_block(),
-                current_block,
-                age,
-                "freshness guard: pool data too stale, skipping arb"
+                current_block, age, "freshness guard: pool data too stale, skipping arb"
             );
             return false;
         }
@@ -131,7 +129,14 @@ pub fn scan_all_opportunities(
         for &size in &INPUT_SIZES_ETH {
             let input = U256::from(size);
             if let Some(out) = execute_path(pools, path, input, current_block) {
-                opps.push(apply_gas(out, input, gas_price, weth_price_usd, path.name, path.chain));
+                opps.push(apply_gas(
+                    out,
+                    input,
+                    gas_price,
+                    weth_price_usd,
+                    path.name,
+                    path.chain,
+                ));
             }
         }
     }
@@ -159,8 +164,8 @@ pub fn u256_to_f64(v: U256) -> f64 {
 mod tests {
     use super::*;
     use crate::dex::v2::amm_out;
-    use ethers::types::Address;
     use crate::types::{DexType, HopSpec};
+    use ethers::types::Address;
 
     // ── Test fixtures ─────────────────────────────────────────────────────────
 
@@ -190,36 +195,47 @@ mod tests {
         PoolKey::new(ChainId::Ethereum, test_addr(DW_POOL))
     }
 
+    type PoolSnapshot = (u128, u128, u64);
+
     fn make_pools(
-        wu_r0: u128, wu_r1: u128, wu_block: u64,
-        ud_r0: u128, ud_r1: u128, ud_block: u64,
-        dw_r0: u128, dw_r1: u128, dw_block: u64,
+        (wu_r0, wu_r1, wu_block): PoolSnapshot,
+        (ud_r0, ud_r1, ud_block): PoolSnapshot,
+        (dw_r0, dw_r1, dw_block): PoolSnapshot,
     ) -> HashMap<PoolKey, PoolState> {
         let mut m = HashMap::new();
         // WU: token0=USDC(2), token1=WETH(1)
-        m.insert(wu_key(), PoolState::V2 {
-            reserve0: U256::from(wu_r0),
-            reserve1: U256::from(wu_r1),
-            token0: test_addr(USDC),
-            token1: test_addr(WETH),
-            last_block: wu_block,
-        });
+        m.insert(
+            wu_key(),
+            PoolState::V2 {
+                reserve0: U256::from(wu_r0),
+                reserve1: U256::from(wu_r1),
+                token0: test_addr(USDC),
+                token1: test_addr(WETH),
+                last_block: wu_block,
+            },
+        );
         // UD: token0=DAI(3), token1=USDC(2)
-        m.insert(ud_key(), PoolState::V2 {
-            reserve0: U256::from(ud_r0),
-            reserve1: U256::from(ud_r1),
-            token0: test_addr(DAI),
-            token1: test_addr(USDC),
-            last_block: ud_block,
-        });
+        m.insert(
+            ud_key(),
+            PoolState::V2 {
+                reserve0: U256::from(ud_r0),
+                reserve1: U256::from(ud_r1),
+                token0: test_addr(DAI),
+                token1: test_addr(USDC),
+                last_block: ud_block,
+            },
+        );
         // DW: token0=DAI(3), token1=WETH(1)
-        m.insert(dw_key(), PoolState::V2 {
-            reserve0: U256::from(dw_r0),
-            reserve1: U256::from(dw_r1),
-            token0: test_addr(DAI),
-            token1: test_addr(WETH),
-            last_block: dw_block,
-        });
+        m.insert(
+            dw_key(),
+            PoolState::V2 {
+                reserve0: U256::from(dw_r0),
+                reserve1: U256::from(dw_r1),
+                token0: test_addr(DAI),
+                token1: test_addr(WETH),
+                last_block: dw_block,
+            },
+        );
         m
     }
 
@@ -298,17 +314,26 @@ mod tests {
 
     #[test]
     fn test_amm_out_zero_reserve_in() {
-        assert_eq!(amm_out(U256::from(100u64), U256::zero(), U256::from(1000u64)), None);
+        assert_eq!(
+            amm_out(U256::from(100u64), U256::zero(), U256::from(1000u64)),
+            None
+        );
     }
 
     #[test]
     fn test_amm_out_zero_reserve_out() {
-        assert_eq!(amm_out(U256::from(100u64), U256::from(1000u64), U256::zero()), None);
+        assert_eq!(
+            amm_out(U256::from(100u64), U256::from(1000u64), U256::zero()),
+            None
+        );
     }
 
     #[test]
     fn test_amm_out_zero_amount_in() {
-        assert_eq!(amm_out(U256::zero(), U256::from(1000u64), U256::from(1000u64)), None);
+        assert_eq!(
+            amm_out(U256::zero(), U256::from(1000u64), U256::from(1000u64)),
+            None
+        );
     }
 
     #[test]
@@ -360,7 +385,7 @@ mod tests {
         let mut m: HashMap<PoolKey, u32> = HashMap::new();
         m.insert(k1, 10);
         assert_eq!(m[&k2], 10);
-        assert!(m.get(&k3).is_none());
+        assert!(!m.contains_key(&k3));
     }
 
     // ── Freshness guard ───────────────────────────────────────────────────────
@@ -369,9 +394,13 @@ mod tests {
     fn test_freshness_guard_passes_when_fresh() {
         // All pools at block 100; current_block=110. Age=10 for oldest, within MAX_STALE_BLOCKS=20.
         let pools = make_pools(
-            1_000_000, 300_000_000_000_000_000_000u128, 100,
-            3_000_000_000_000_000_000_000u128, 1_000_000, 105,
-            3_000_000_000_000_000_000_000u128, 1_000_000_000_000_000_000u128, 108,
+            (1_000_000, 300_000_000_000_000_000_000u128, 100),
+            (3_000_000_000_000_000_000_000u128, 1_000_000, 105),
+            (
+                3_000_000_000_000_000_000_000u128,
+                1_000_000_000_000_000_000u128,
+                108,
+            ),
         );
         assert!(path_is_fresh(&pools, &forward_path(), 110));
     }
@@ -380,9 +409,13 @@ mod tests {
     fn test_freshness_guard_skips_stale() {
         // wu_pool at block 80, current_block=105 → age=25 > MAX_STALE_BLOCKS=20.
         let pools = make_pools(
-            1_000_000, 300_000_000_000_000_000_000u128, 80,
-            3_000_000_000_000_000_000_000u128, 1_000_000, 100,
-            3_000_000_000_000_000_000_000u128, 1_000_000_000_000_000_000u128, 100,
+            (1_000_000, 300_000_000_000_000_000_000u128, 80),
+            (3_000_000_000_000_000_000_000u128, 1_000_000, 100),
+            (
+                3_000_000_000_000_000_000_000u128,
+                1_000_000_000_000_000_000u128,
+                100,
+            ),
         );
         assert!(!path_is_fresh(&pools, &forward_path(), 105));
     }
@@ -390,13 +423,16 @@ mod tests {
     #[test]
     fn test_freshness_guard_missing_pool() {
         let mut pools = HashMap::new();
-        pools.insert(wu_key(), PoolState::V2 {
-            reserve0: U256::from(1u64),
-            reserve1: U256::from(1u64),
-            token0: test_addr(USDC),
-            token1: test_addr(WETH),
-            last_block: 100,
-        });
+        pools.insert(
+            wu_key(),
+            PoolState::V2 {
+                reserve0: U256::from(1u64),
+                reserve1: U256::from(1u64),
+                token0: test_addr(USDC),
+                token1: test_addr(WETH),
+                last_block: 100,
+            },
+        );
         // ud_key and dw_key missing — path has 3 hops but only 1 pool
         assert!(!path_is_fresh(&pools, &forward_path(), 100));
     }
@@ -405,9 +441,13 @@ mod tests {
     fn test_execute_path_returns_none_when_stale() {
         // wu_pool at block 80, current_block=105 → age=25 > MAX_STALE_BLOCKS=20.
         let pools = make_pools(
-            1_000_000, 300_000_000_000_000_000_000u128, 80,
-            3_000_000_000_000_000_000_000u128, 1_000_000, 100,
-            3_000_000_000_000_000_000_000u128, 1_000_000_000_000_000_000u128, 100,
+            (1_000_000, 300_000_000_000_000_000_000u128, 80),
+            (3_000_000_000_000_000_000_000u128, 1_000_000, 100),
+            (
+                3_000_000_000_000_000_000_000u128,
+                1_000_000_000_000_000_000u128,
+                100,
+            ),
         );
         assert!(execute_path(&pools, &forward_path(), eth(1), 105).is_none());
     }
@@ -427,9 +467,9 @@ mod tests {
         let weth_dw: u128 = 3_333_000_000_000_000_000_000u128; // 3333 WETH
 
         let pools = make_pools(
-            usdc_reserves, weth_wu, 100,
-            dai_ud, usdc_ud, 100,
-            dai_dw, weth_dw, 100,
+            (usdc_reserves, weth_wu, 100),
+            (dai_ud, usdc_ud, 100),
+            (dai_dw, weth_dw, 100),
         );
 
         let fwd = execute_path(&pools, &forward_path(), eth(1), 100);
@@ -448,17 +488,17 @@ mod tests {
         // WethUsdc: reserve0(USDC 6dec)=3_000_000_000 (3000 USDC), reserve1(WETH)=1e18 (1 WETH)
         let usdc_r0: u128 = 3_000_000_000; // 3000 USDC in 6-dec
         let weth_r1: u128 = 1_000_000_000_000_000_000; // 1 WETH
-        // UsdcDai: large DAI/USDC reserves at 1:1 ratio (scaled)
+                                                       // UsdcDai: large DAI/USDC reserves at 1:1 ratio (scaled)
         let dai_ud: u128 = 3_000_000_000_000_000_000_000u128; // 3000 DAI in 18-dec
         let usdc_ud: u128 = 3_000_000_000; // 3000 USDC in 6-dec
-        // DaiWeth: DAI/WETH at $3000
+                                           // DaiWeth: DAI/WETH at $3000
         let dai_dw: u128 = 3_000_000_000_000_000_000_000u128; // 3000 DAI
         let weth_dw: u128 = 1_000_000_000_000_000_000; // 1 WETH
 
         let pools = make_pools(
-            usdc_r0, weth_r1, 100,
-            dai_ud, usdc_ud, 100,
-            dai_dw, weth_dw, 100,
+            (usdc_r0, weth_r1, 100),
+            (dai_ud, usdc_ud, 100),
+            (dai_dw, weth_dw, 100),
         );
 
         let input = U256::from(1_000_000_000_000_000u64); // 0.001 WETH
@@ -469,7 +509,7 @@ mod tests {
 
         // Output should be in the same order of magnitude as input (wei range),
         // not inflated to 6-dec scale (which would be ~1000x too small).
-        let lower = U256::from(1_000_000_000_000u64);       // 1e12 wei = 0.000001 WETH
+        let lower = U256::from(1_000_000_000_000u64); // 1e12 wei = 0.000001 WETH
         let upper = U256::from(100_000_000_000_000_000u64); // 1e17 wei = 0.1 WETH
         assert!(
             out_val >= lower && out_val <= upper,
@@ -486,15 +526,11 @@ mod tests {
         // Hand-calculated for input=1 ETH:
         // usdc_out ≈ 2_989_000_000 (~$2989 USDC in 6-dec units)
         let weth_amt: u128 = 1_000_000_000_000_000_000u128;
-        let wu_r0: u128 = 6_700_000_000_000u128;           // 6.7M USDC
+        let wu_r0: u128 = 6_700_000_000_000u128; // 6.7M USDC
         let wu_r1: u128 = 2_234_000_000_000_000_000_000u128; // 2234 WETH
 
         // reserve_in = WETH (reserve1), reserve_out = USDC (reserve0)
-        let usdc_out = amm_out(
-            U256::from(weth_amt),
-            U256::from(wu_r1),
-            U256::from(wu_r0),
-        );
+        let usdc_out = amm_out(U256::from(weth_amt), U256::from(wu_r1), U256::from(wu_r0));
 
         assert!(usdc_out.is_some());
         let usdc = usdc_out.unwrap().low_u64();
