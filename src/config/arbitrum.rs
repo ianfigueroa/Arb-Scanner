@@ -24,6 +24,7 @@ pub fn pool_key_weth_usdc_e() -> PoolKey {
 }
 
 /// Primary WETH/stable pair used for price display and cross-chain monitoring.
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn weth_usdc_key() -> PoolKey {
     pool_key_weth_usdc_e()
 }

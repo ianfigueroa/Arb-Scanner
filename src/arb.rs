@@ -5,7 +5,6 @@ use ethers::types::U256;
 use tracing::warn;
 
 use crate::dex;
-pub use crate::dex::v2::amm_out;
 use crate::types::{ArbOpportunity, ArbPath, ChainId, PoolKey, PoolState};
 
 /// Maximum blocks a pool's last_block may lag behind current_block before its data
@@ -159,6 +158,7 @@ pub fn u256_to_f64(v: U256) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::dex::v2::amm_out;
     use ethers::types::Address;
     use crate::types::{DexType, HopSpec};
 

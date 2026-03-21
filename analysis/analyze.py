@@ -12,10 +12,35 @@ from pathlib import Path
 
 import pandas as pd
 import matplotlib.pyplot as plt
-import seaborn as sns
-from rich.console import Console
-from rich.table import Table
-from rich.panel import Panel
+
+try:
+    from rich.console import Console
+    from rich.table import Table
+    from rich.panel import Panel
+except ImportError:
+    class Console:
+        def print(self, *args, **kwargs) -> None:
+            print(*args)
+
+    class Table:
+        def __init__(self, *args, **kwargs) -> None:
+            self.rows: list[tuple[str, ...]] = []
+
+        def add_column(self, *args, **kwargs) -> None:
+            pass
+
+        def add_row(self, *args) -> None:
+            self.rows.append(tuple(str(arg) for arg in args))
+
+        def __str__(self) -> str:
+            return "\n".join(" | ".join(row) for row in self.rows)
+
+    class Panel:
+        def __init__(self, renderable: str, *args, **kwargs) -> None:
+            self.renderable = renderable
+
+        def __str__(self) -> str:
+            return self.renderable
 
 console = Console()
 
@@ -46,7 +71,7 @@ def load_data(db_path: str) -> tuple[pd.DataFrame, pd.DataFrame]:
     con = sqlite3.connect(db_path)
 
     opps = pd.read_sql_query(
-        "SELECT * FROM arb_opportunities ORDER BY timestamp ASC", con
+        "SELECT * FROM opportunities ORDER BY timestamp ASC", con
     )
     snaps = pd.read_sql_query(
         "SELECT * FROM price_snapshots ORDER BY timestamp ASC", con
@@ -66,6 +91,18 @@ def load_data(db_path: str) -> tuple[pd.DataFrame, pd.DataFrame]:
     return opps, snaps
 
 
+def count_tracked_blocks(snaps: pd.DataFrame) -> int:
+    if snaps.empty or "block" not in snaps.columns:
+        return 0
+    return int(snaps["block"].nunique())
+
+
+def net_profit_eth(opps: pd.DataFrame) -> pd.Series:
+    if opps.empty or "net_wei" not in opps.columns:
+        return pd.Series(dtype="float64")
+    return opps["net_wei"] / 1e18
+
+
 def print_session_overview(opps: pd.DataFrame, snaps: pd.DataFrame) -> None:
     if opps.empty:
         time_range = "no data"
@@ -74,7 +111,7 @@ def print_session_overview(opps: pd.DataFrame, snaps: pd.DataFrame) -> None:
         t_min = opps["datetime"].min().strftime("%Y-%m-%d %H:%M UTC")
         t_max = opps["datetime"].max().strftime("%Y-%m-%d %H:%M UTC")
         time_range = f"{t_min} → {t_max}"
-        blocks = snaps["block_number"].nunique() if not snaps.empty and "block_number" in snaps.columns else 0
+        blocks = count_tracked_blocks(snaps)
 
     chains = opps["chain"].nunique() if not opps.empty else 0
     total = len(opps)
@@ -229,7 +266,7 @@ def plot_path_frequency(opps: pd.DataFrame, out: str) -> None:
 def plot_gas_vs_profit(opps: pd.DataFrame, out: str) -> None:
     fig, ax = plt.subplots(figsize=(10, 6))
     if not opps.empty:
-        net_eth = opps["estimated_net_after_gas"] / 1e18
+        net_eth = net_profit_eth(opps)
         colors = opps["chain"].astype("category").cat.codes
         scatter = ax.scatter(
             opps["gas_cost_usd"],

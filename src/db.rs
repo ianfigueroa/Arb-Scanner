@@ -1,7 +1,7 @@
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use eyre::WrapErr;
+use eyre::{eyre, WrapErr};
 use rusqlite::{params, Connection};
 
 use crate::arb::u256_to_f64;
@@ -12,6 +12,14 @@ use crate::types::ArbOpportunity;
 #[derive(Clone)]
 pub struct OpportunityDb {
     conn: Arc<Mutex<Connection>>,
+}
+
+fn checked_i128_to_i64(value: i128, field: &str) -> eyre::Result<i64> {
+    i64::try_from(value).map_err(|_| eyre!("{field} out of SQLite INTEGER range: {value}"))
+}
+
+fn checked_u64_to_i64(value: u64, field: &str) -> eyre::Result<i64> {
+    i64::try_from(value).map_err(|_| eyre!("{field} out of SQLite INTEGER range: {value}"))
 }
 
 impl OpportunityDb {
@@ -52,17 +60,20 @@ impl OpportunityDb {
 
     pub fn insert_opportunity(&self, opp: &ArbOpportunity) -> eyre::Result<()> {
         let input_eth = u256_to_f64(opp.input_weth) / 1e18;
+        let timestamp = checked_u64_to_i64(opp.timestamp, "timestamp")?;
+        let net_wei = checked_i128_to_i64(opp.estimated_net_after_gas, "net_wei")?;
+
         let conn = self.conn.lock().unwrap();
         conn.execute(
             "INSERT INTO opportunities (timestamp, chain, path, input_eth, roi_pct, net_wei, gas_cost_usd)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
             params![
-                opp.timestamp as i64,
+                timestamp,
                 opp.chain.name(),
                 opp.path,
                 input_eth,
                 opp.roi_pct,
-                opp.estimated_net_after_gas as i64,
+                net_wei,
                 opp.gas_cost_usd,
             ],
         )
@@ -75,11 +86,14 @@ impl OpportunityDb {
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_secs();
+        let timestamp = checked_u64_to_i64(timestamp, "timestamp")?;
+        let block = checked_u64_to_i64(block, "block")?;
+
         let conn = self.conn.lock().unwrap();
         conn.execute(
             "INSERT INTO price_snapshots (timestamp, chain, block, weth_usd)
              VALUES (?1, ?2, ?3, ?4)",
-            params![timestamp as i64, chain, block as i64, weth_usd],
+            params![timestamp, chain, block, weth_usd],
         )
         .wrap_err("insert_price_snapshot failed")?;
         Ok(())
@@ -219,5 +233,22 @@ mod tests {
         let content = std::fs::read_to_string(&path).unwrap();
         assert!(content.starts_with("timestamp,chain,path,"));
         assert!(content.lines().count() >= 2);
+    }
+
+    #[test]
+    fn test_checked_i128_to_i64_rejects_overflow() {
+        let err = checked_i128_to_i64(i64::MAX as i128 + 1, "net_wei").unwrap_err();
+        assert!(err.to_string().contains("net_wei"));
+    }
+
+    #[test]
+    fn test_insert_opportunity_rejects_net_wei_out_of_i64_range() {
+        let db = OpportunityDb::open(":memory:").unwrap();
+        let mut opp = make_opp("A→B→C", 0.01);
+        opp.estimated_net_after_gas = i64::MAX as i128 + 1;
+
+        let err = db.insert_opportunity(&opp).unwrap_err();
+
+        assert!(err.to_string().contains("net_wei"));
     }
 }

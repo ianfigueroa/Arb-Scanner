@@ -29,6 +29,7 @@ pub fn arb_paths(chain: ChainId) -> Vec<ArbPath> {
 ///
 /// Used for WETH/USD price estimation and cross-chain monitoring.
 /// `usdc_is_token0=true` means reserve0 is USDC (6 dec), reserve1 is WETH (18 dec).
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn weth_usdc_pool_info(chain: ChainId) -> Option<(PoolKey, bool)> {
     match chain {
         // token0=USDC, token1=WETH

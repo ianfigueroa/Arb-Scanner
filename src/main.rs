@@ -195,6 +195,24 @@ async fn spawn_chain_tasks(
     let current_block: Arc<RwLock<u64>> = Arc::new(RwLock::new(0));
     let (arb_tx, mut arb_rx) = watch::channel(());
 
+    match provider.get_block_number().await {
+        Ok(block) => {
+            *current_block.write().await = block.as_u64();
+        }
+        Err(e) => {
+            warn!(chain = chain.name(), "initial get_block_number failed: {e}");
+        }
+    }
+
+    match provider.get_gas_price().await {
+        Ok(price) => {
+            *gas_price.write().await = Some(price);
+        }
+        Err(e) => {
+            warn!(chain = chain.name(), "initial get_gas_price failed: {e}");
+        }
+    }
+
     // Subscription task (reconnect loop)
     {
         let ws_url_sub = ws_url.clone();
@@ -244,7 +262,7 @@ async fn spawn_chain_tasks(
 
     // Block task (gas price + stale refresh + price display)
     {
-        let provider_blocks = provider.clone();
+        let ws_url_blocks = ws_url.clone();
         let gas_price_blocks = gas_price.clone();
         let current_block_blocks = current_block.clone();
         let registry_blocks = registry.clone();
@@ -252,56 +270,93 @@ async fn spawn_chain_tasks(
         let stats_blocks = stats.clone();
         let weth_usd_price_blocks = weth_usd_price.clone();
         let db_blocks = db.clone();
+        let arb_tx_blocks = arb_tx.clone();
         tokio::spawn(async move {
-            match provider_blocks.subscribe_blocks().await {
-                Err(e) => error!(chain = chain.name(), "subscribe_blocks failed: {e}"),
-                Ok(mut stream) => {
-                    while let Some(block) = stream.next().await {
-                        let block_num = block.number.map(|b| b.as_u64()).unwrap_or(0);
-                        *current_block_blocks.write().await = block_num;
-
-                        let gp = match provider_blocks.get_gas_price().await {
-                            Ok(p) => {
-                                *gas_price_blocks.write().await = Some(p);
-                                p
-                            }
+            let mut backoff = Duration::from_secs(1);
+            loop {
+                match Provider::<Ws>::connect(&ws_url_blocks).await {
+                    Err(e) => {
+                        error!(
+                            chain = chain.name(),
+                            "block reconnect failed: {e:#}; retrying in {}s",
+                            backoff.as_secs()
+                        );
+                        tokio::time::sleep(backoff).await;
+                        backoff = (backoff * 2).min(Duration::from_secs(60));
+                    }
+                    Ok(provider_blocks) => {
+                        let provider_blocks = Arc::new(provider_blocks);
+                        let subscribe_result = provider_blocks.subscribe_blocks().await;
+                        match subscribe_result {
                             Err(e) => {
-                                warn!(chain = chain.name(), "get_gas_price failed: {e}");
-                                match *gas_price_blocks.read().await {
-                                    Some(p) => p,
-                                    None => continue,
-                                }
+                                error!(
+                                    chain = chain.name(),
+                                    "subscribe_blocks failed: {e:#}; retrying in {}s",
+                                    backoff.as_secs()
+                                );
+                                tokio::time::sleep(backoff).await;
+                                backoff = (backoff * 2).min(Duration::from_secs(60));
                             }
-                        };
+                            Ok(mut stream) => {
+                                backoff = Duration::from_secs(1);
+                                while let Some(block) = stream.next().await {
+                                    let block_num = block.number.map(|b| b.as_u64()).unwrap_or(0);
+                                    *current_block_blocks.write().await = block_num;
 
-                        refresh_stale_pools(
-                            provider_blocks.clone(),
-                            &registry_blocks,
-                            &catalog_blocks,
-                            block_num,
-                        )
-                        .await;
+                                    let gp = match provider_blocks.get_gas_price().await {
+                                        Ok(p) => {
+                                            *gas_price_blocks.write().await = Some(p);
+                                            p
+                                        }
+                                        Err(e) => {
+                                            warn!(chain = chain.name(), "get_gas_price failed: {e}");
+                                            match *gas_price_blocks.read().await {
+                                                Some(p) => p,
+                                                None => continue,
+                                            }
+                                        }
+                                    };
 
-                        let snap = registry_blocks.snapshot().await;
-                        let price_line = build_chain_price_line(chain, &snap, &catalog_blocks);
+                                    refresh_stale_pools(
+                                        provider_blocks.clone(),
+                                        &registry_blocks,
+                                        &catalog_blocks,
+                                        block_num,
+                                    )
+                                    .await;
 
-                        if let Some(p) = chain_weth_usd_price(chain, &snap, &catalog_blocks) {
-                            *weth_usd_price_blocks.write().await = Some(p);
-                            if let Err(e) =
-                                db_blocks.insert_price_snapshot(chain.name(), block_num, p)
-                            {
-                                warn!(chain = chain.name(), "insert_price_snapshot failed: {e:#}");
+                                    let snap = registry_blocks.snapshot().await;
+                                    let price_line = build_chain_price_line(chain, &snap, &catalog_blocks);
+
+                                    if let Some(p) = chain_weth_usd_price(chain, &snap, &catalog_blocks) {
+                                        *weth_usd_price_blocks.write().await = Some(p);
+                                        if let Err(e) =
+                                            db_blocks.insert_price_snapshot(chain.name(), block_num, p)
+                                        {
+                                            warn!(chain = chain.name(), "insert_price_snapshot failed: {e:#}");
+                                        }
+                                    }
+
+                                    info!(
+                                        chain = chain.name(),
+                                        block = block_num,
+                                        gas_gwei = format!("{:.2}", u256_to_f64(gp) / 1e9),
+                                        "{price_line}"
+                                    );
+
+                                    stats_blocks.write().await.blocks_scanned += 1;
+                                    let _ = arb_tx_blocks.send(());
+                                }
+
+                                error!(
+                                    chain = chain.name(),
+                                    "block stream ended unexpectedly; reconnecting in {}s",
+                                    backoff.as_secs()
+                                );
+                                tokio::time::sleep(backoff).await;
+                                backoff = (backoff * 2).min(Duration::from_secs(60));
                             }
                         }
-
-                        info!(
-                            chain = chain.name(),
-                            block = block_num,
-                            gas_gwei = format!("{:.2}", u256_to_f64(gp) / 1e9),
-                            "{price_line}"
-                        );
-
-                        stats_blocks.write().await.blocks_scanned += 1;
                     }
                 }
             }
@@ -377,6 +432,10 @@ async fn spawn_chain_tasks(
                 }
             }
         });
+    }
+
+    if *current_block.read().await > 0 && gas_price.read().await.is_some() {
+        let _ = arb_tx.send(());
     }
 
     Ok(())
