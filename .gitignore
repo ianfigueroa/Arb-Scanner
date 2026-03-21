@@ -1,2 +1,8 @@
 /target
 .env
+arb_opportunities.db
+arb_opportunities_*.csv
+analysis/output/
+analysis/test_*.db
+analysis/tmp*/
+__pycache__/

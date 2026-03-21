@@ -2,6 +2,13 @@
 name = "arb-bot"
 version = "0.1.0"
 edition = "2021"
+description = "Read-only multi-chain DEX arbitrage scanner with SQLite logging and Python analytics"
+license = "MIT"
+readme = "README.md"
+repository = "https://github.com/ianfigueroa/Arb-Scanner"
+homepage = "https://github.com/ianfigueroa/Arb-Scanner"
+keywords = ["arbitrage", "ethereum", "defi", "scanner", "mev"]
+categories = ["command-line-utilities", "finance"]
 
 [dependencies]
 ethers = { version = "2", features = ["ws", "rustls"] }
