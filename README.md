@@ -1,6 +1,9 @@
-# arb-bot
+# Arb Scanner
 
-A scan-only arbitrage scanner that watches DEX pools across multiple chains and logs when it spots a price discrepancy worth noting. It doesn't execute anything — no private keys, no transactions, no flashbots. Just a read-only window into on-chain prices.
+[![CI](https://github.com/ianfigueroa/Arb-Scanner/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/ianfigueroa/Arb-Scanner/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
+A read-only arbitrage scanner that watches DEX pools across multiple chains and logs when it spots a price discrepancy worth noting. It does not execute anything: no private keys, no transactions, no bundles. It is a research and monitoring tool for on-chain pricing, not a trading engine.
 
 ---
 
@@ -129,6 +132,10 @@ This prints rich summary tables and saves 5 charts to `analysis/output/`:
 - `gas_vs_profit.png` — scatter of gas cost vs net profit
 - `weth_price.png` — WETH/USD price over time per chain
 
+Example chart from a sample run:
+
+![ROI distribution example](docs/example-roi-distribution.png)
+
 ---
 
 ## Honest caveats
@@ -137,7 +144,7 @@ This prints rich summary tables and saves 5 charts to `analysis/output/`:
 
 **Seeing an opportunity doesn't mean you can capture it.** MEV searchers are doing the same math faster, with better tooling, and submitting bundles directly to validators. A positive `roi_pct` is a signal worth watching, not a confirmed profit.
 
-**This is read-only.** No signing key, no transaction builder, no execution. Safe to run.
+**This is read-only.** No signing key, no transaction builder, no execution.
 
 **ethers-rs 2.x is in maintenance mode.** Works fine for this use case. If you want to build on top of this seriously, migrating to [alloy-rs](https://github.com/alloy-rs/alloy) is the right call.
 
@@ -181,7 +188,10 @@ analysis/
 ## Tests
 
 ```bash
+cargo fmt --check
+cargo clippy --all-targets --all-features -- -D warnings
 cargo test
+python -m unittest analysis.test_analyze
 ```
 
-81 tests covering AMM math, V3 fixed-point arithmetic, freshness guards, cross-chain spread logic, config invariants, dispatch routing, and the SQLite DB layer.
+Verified locally: 83 Rust tests and 3 Python tests covering AMM math, V3 fixed-point arithmetic, freshness guards, cross-chain spread logic, config invariants, dispatch routing, the SQLite DB layer, and analysis schema handling.
