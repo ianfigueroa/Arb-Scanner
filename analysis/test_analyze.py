@@ -4,7 +4,12 @@ from contextlib import contextmanager
 from pathlib import Path
 from uuid import uuid4
 
-from analysis.analyze import count_tracked_blocks, load_data, net_profit_eth
+from analysis.analyze import (
+    count_tracked_blocks,
+    load_data,
+    net_profit_eth,
+    session_overview_stats,
+)
 
 
 def seed_db(db_path: Path) -> None:
@@ -85,6 +90,34 @@ class AnalyzeTests(unittest.TestCase):
 
             net_eth = net_profit_eth(opps)
             self.assertAlmostEqual(float(net_eth.iloc[0]), 0.125)
+
+    def test_session_overview_uses_snapshots_when_no_opportunities(self) -> None:
+        with temp_db_path() as db_path:
+            seed_db(db_path)
+
+            con = sqlite3.connect(str(db_path))
+            con.execute("DELETE FROM opportunities")
+            con.execute(
+                """
+                INSERT INTO price_snapshots (timestamp, chain, block, weth_usd)
+                VALUES (?, ?, ?, ?)
+                """,
+                (1_700_000_600, "base", 21_000_001, 3205.0),
+            )
+            con.commit()
+            con.close()
+
+            opps, snaps = load_data(str(db_path))
+
+            overview = session_overview_stats(opps, snaps)
+
+            self.assertEqual(overview["total_opportunities"], 0)
+            self.assertEqual(overview["chains_active"], 2)
+            self.assertEqual(overview["blocks_tracked"], 2)
+            self.assertEqual(
+                overview["time_range"],
+                "2023-11-14 22:13 UTC -> 2023-11-14 22:23 UTC",
+            )
 
 
 if __name__ == "__main__":

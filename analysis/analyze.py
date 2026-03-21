@@ -20,7 +20,14 @@ try:
 except ImportError:
     class Console:
         def print(self, *args, **kwargs) -> None:
-            print(*args)
+            try:
+                print(*args, **kwargs)
+            except UnicodeEncodeError:
+                text = kwargs.get("sep", " ").join(str(arg) for arg in args)
+                end = kwargs.get("end", "\n")
+                stream = kwargs.get("file", sys.stdout)
+                stream.buffer.write((text + end).encode(stream.encoding or "utf-8", errors="replace"))
+                stream.flush()
 
     class Table:
         def __init__(self, *args, **kwargs) -> None:
@@ -103,24 +110,40 @@ def net_profit_eth(opps: pd.DataFrame) -> pd.Series:
     return opps["net_wei"] / 1e18
 
 
-def print_session_overview(opps: pd.DataFrame, snaps: pd.DataFrame) -> None:
-    if opps.empty:
-        time_range = "no data"
-        blocks = 0
-    else:
+def session_overview_stats(opps: pd.DataFrame, snaps: pd.DataFrame) -> dict[str, int | str]:
+    if not snaps.empty:
+        t_min = snaps["datetime"].min().strftime("%Y-%m-%d %H:%M UTC")
+        t_max = snaps["datetime"].max().strftime("%Y-%m-%d %H:%M UTC")
+        time_range = f"{t_min} -> {t_max}"
+        chains = int(snaps["chain"].nunique()) if "chain" in snaps.columns else 0
+        blocks = count_tracked_blocks(snaps)
+    elif not opps.empty:
         t_min = opps["datetime"].min().strftime("%Y-%m-%d %H:%M UTC")
         t_max = opps["datetime"].max().strftime("%Y-%m-%d %H:%M UTC")
-        time_range = f"{t_min} → {t_max}"
-        blocks = count_tracked_blocks(snaps)
+        time_range = f"{t_min} -> {t_max}"
+        chains = int(opps["chain"].nunique()) if "chain" in opps.columns else 0
+        blocks = 0
+    else:
+        time_range = "no data"
+        chains = 0
+        blocks = 0
 
-    chains = opps["chain"].nunique() if not opps.empty else 0
-    total = len(opps)
+    return {
+        "total_opportunities": len(opps),
+        "chains_active": chains,
+        "time_range": time_range,
+        "blocks_tracked": blocks,
+    }
+
+
+def print_session_overview(opps: pd.DataFrame, snaps: pd.DataFrame) -> None:
+    overview = session_overview_stats(opps, snaps)
 
     text = (
-        f"[bold]Total opportunities:[/bold] {total}\n"
-        f"[bold]Chains active:[/bold]       {chains}\n"
-        f"[bold]Time range:[/bold]           {time_range}\n"
-        f"[bold]Blocks tracked:[/bold]       {blocks}"
+        f"[bold]Total opportunities:[/bold] {overview['total_opportunities']}\n"
+        f"[bold]Chains active:[/bold]       {overview['chains_active']}\n"
+        f"[bold]Time range:[/bold]           {overview['time_range']}\n"
+        f"[bold]Blocks tracked:[/bold]       {overview['blocks_tracked']}"
     )
     console.print(Panel(text, title="Session Overview", expand=False))
 
