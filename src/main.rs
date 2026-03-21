@@ -176,7 +176,11 @@ async fn spawn_chain_tasks(
     let (catalog, paths) = resolve_pool_catalog(&provider, chain)
         .await
         .wrap_err_with(|| format!("pool catalog resolution failed for {}", chain.name()))?;
-    info!(chain = chain.name(), pools = catalog.len(), "pool catalog resolved");
+    info!(
+        chain = chain.name(),
+        pools = catalog.len(),
+        "pool catalog resolved"
+    );
 
     let catalog = Arc::new(catalog);
     let paths = Arc::new(paths);
@@ -309,7 +313,10 @@ async fn spawn_chain_tasks(
                                             p
                                         }
                                         Err(e) => {
-                                            warn!(chain = chain.name(), "get_gas_price failed: {e}");
+                                            warn!(
+                                                chain = chain.name(),
+                                                "get_gas_price failed: {e}"
+                                            );
                                             match *gas_price_blocks.read().await {
                                                 Some(p) => p,
                                                 None => continue,
@@ -326,14 +333,22 @@ async fn spawn_chain_tasks(
                                     .await;
 
                                     let snap = registry_blocks.snapshot().await;
-                                    let price_line = build_chain_price_line(chain, &snap, &catalog_blocks);
+                                    let price_line =
+                                        build_chain_price_line(chain, &snap, &catalog_blocks);
 
-                                    if let Some(p) = chain_weth_usd_price(chain, &snap, &catalog_blocks) {
+                                    if let Some(p) =
+                                        chain_weth_usd_price(chain, &snap, &catalog_blocks)
+                                    {
                                         *weth_usd_price_blocks.write().await = Some(p);
-                                        if let Err(e) =
-                                            db_blocks.insert_price_snapshot(chain.name(), block_num, p)
-                                        {
-                                            warn!(chain = chain.name(), "insert_price_snapshot failed: {e:#}");
+                                        if let Err(e) = db_blocks.insert_price_snapshot(
+                                            chain.name(),
+                                            block_num,
+                                            p,
+                                        ) {
+                                            warn!(
+                                                chain = chain.name(),
+                                                "insert_price_snapshot failed: {e:#}"
+                                            );
                                         }
                                     }
 
@@ -454,7 +469,10 @@ fn chain_weth_usd_price(
     if key.chain != chain {
         return None;
     }
-    if let PoolState::V2 { reserve0, reserve1, .. } = snap.get(&key)? {
+    if let PoolState::V2 {
+        reserve0, reserve1, ..
+    } = snap.get(&key)?
+    {
         let (usdc_raw, weth_raw) = if usdc_is_token0 {
             (u256_to_f64(*reserve0), u256_to_f64(*reserve1))
         } else {

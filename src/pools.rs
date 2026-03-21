@@ -83,9 +83,7 @@ pub async fn resolve_pool_catalog(
     chain: ChainId,
 ) -> Result<(Vec<PoolCatalogEntry>, Vec<ArbPath>)> {
     match chain {
-        ChainId::Ethereum | ChainId::Arbitrum => {
-            Ok((pool_catalog(chain), arb_paths(chain)))
-        }
+        ChainId::Ethereum | ChainId::Arbitrum => Ok((pool_catalog(chain), arb_paths(chain))),
         ChainId::Base => {
             use crate::config::base;
             let factory = base::factory();
@@ -171,7 +169,10 @@ pub async fn verify_pool_tokens(
     for cfg in catalog {
         if cfg.dex_type == DexType::CurveStableswap {
             // Curve pools use coins(i) not token0/token1; skip on-chain verification
-            info!(pool = cfg.name, "skipping token verification for Curve pool");
+            info!(
+                pool = cfg.name,
+                "skipping token verification for Curve pool"
+            );
             continue;
         }
 
@@ -302,7 +303,13 @@ pub async fn bootstrap_reserves(
                     "bootstrapped curve balances"
                 );
                 registry
-                    .update(cfg.pool_key, PoolState::Curve { balances, last_block: current_block })
+                    .update(
+                        cfg.pool_key,
+                        PoolState::Curve {
+                            balances,
+                            last_block: current_block,
+                        },
+                    )
                     .await;
             }
         }
@@ -336,7 +343,11 @@ async fn fetch_slot0(provider: Arc<Provider<Ws>>, address: Address) -> Result<U2
     Ok(sqrt_price_x96)
 }
 
-async fn fetch_curve_balance(provider: Arc<Provider<Ws>>, address: Address, i: u64) -> Result<U256> {
+async fn fetch_curve_balance(
+    provider: Arc<Provider<Ws>>,
+    address: Address,
+    i: u64,
+) -> Result<U256> {
     let abi = parse_curve_balances_abi();
     let contract = Contract::new(address, abi, provider);
     contract
@@ -507,14 +518,26 @@ async fn handle_token_exchange_log(
     if let Some(PoolState::Curve { balances, .. }) = current_state {
         let n = balances.len();
         if sold_id >= n || bought_id >= n {
-            warn!(pool = entry.name, sold_id, bought_id, n, "coin index out of range");
+            warn!(
+                pool = entry.name,
+                sold_id,
+                bought_id,
+                n,
+                "coin index out of range"
+            );
             return;
         }
         let mut new_balances = balances.clone();
         new_balances[sold_id] = new_balances[sold_id].saturating_add(tokens_sold);
         new_balances[bought_id] = new_balances[bought_id].saturating_sub(tokens_bought);
         registry
-            .update(entry.pool_key, PoolState::Curve { balances: new_balances, last_block: block_number })
+            .update(
+                entry.pool_key,
+                PoolState::Curve {
+                    balances: new_balances,
+                    last_block: block_number,
+                },
+            )
             .await;
     }
 }
@@ -586,12 +609,8 @@ pub async fn refresh_stale_pools(
                     let mut balances = Vec::with_capacity(n);
                     let mut ok = true;
                     for i in 0..n {
-                        match fetch_curve_balance(
-                            provider.clone(),
-                            cfg.pool_key.address,
-                            i as u64,
-                        )
-                        .await
+                        match fetch_curve_balance(provider.clone(), cfg.pool_key.address, i as u64)
+                            .await
                         {
                             Ok(b) => balances.push(b),
                             Err(e) => {
@@ -605,7 +624,10 @@ pub async fn refresh_stale_pools(
                         registry
                             .update(
                                 cfg.pool_key,
-                                PoolState::Curve { balances, last_block: current_block },
+                                PoolState::Curve {
+                                    balances,
+                                    last_block: current_block,
+                                },
                             )
                             .await;
                     }
