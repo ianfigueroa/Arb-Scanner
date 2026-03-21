@@ -165,11 +165,11 @@ Charts produced:
 
 `weth_price.png` is the chart that should correlate most directly with the live block logs, because both are based on `price_snapshots`.
 
-Sample chart from example data:
+Example chart from a real live session captured on 2026-03-21:
 
-![ROI distribution example](docs/example-roi-distribution.png)
+![Live WETH price chart from 2026-03-21 session](docs/live-weth-price-2026-03-21.png)
 
-This sample image is documentation-only. It is not proof of live profitability from your current database.
+This image was generated from recorded session data in the scanner, not from fabricated sample values. That specific session recorded price snapshots across all four chains and zero profitable opportunities, so a live price chart is the most representative example.
 
 ## Architecture
 
