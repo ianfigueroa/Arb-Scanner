@@ -3,20 +3,24 @@ Arbitrage opportunity analytics dashboard.
 
 Usage:
     python analysis/analyze.py [arb_opportunities.db]
+    python analysis/analyze.py [arb_opportunities.db] --session session-123
+    python analysis/analyze.py [arb_opportunities.db] --all
+    python analysis/analyze.py [arb_opportunities.db] --list-sessions
 """
 
-import sys
-import sqlite3
+import argparse
 import os
+import sqlite3
+import sys
 from pathlib import Path
 
-import pandas as pd
 import matplotlib.pyplot as plt
+import pandas as pd
 
 try:
     from rich.console import Console
-    from rich.table import Table
     from rich.panel import Panel
+    from rich.table import Table
 except ImportError:
     class Console:
         def print(self, *args, **kwargs) -> None:
@@ -26,7 +30,9 @@ except ImportError:
                 text = kwargs.get("sep", " ").join(str(arg) for arg in args)
                 end = kwargs.get("end", "\n")
                 stream = kwargs.get("file", sys.stdout)
-                stream.buffer.write((text + end).encode(stream.encoding or "utf-8", errors="replace"))
+                stream.buffer.write(
+                    (text + end).encode(stream.encoding or "utf-8", errors="replace")
+                )
                 stream.flush()
 
     class Table:
@@ -49,44 +55,201 @@ except ImportError:
         def __str__(self) -> str:
             return self.renderable
 
-console = Console()
 
+console = Console()
 OUTPUT_DIR = Path(__file__).parent / "output"
 
 
-def main(db_path: str) -> None:
-    OUTPUT_DIR.mkdir(exist_ok=True)
-    opps, snaps = load_data(db_path)
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Analyze arbitrage scanner SQLite data.")
+    parser.add_argument("db_path", nargs="?", default="arb_opportunities.db")
+    scope = parser.add_mutually_exclusive_group()
+    scope.add_argument("--session", dest="session_id")
+    scope.add_argument("--all", action="store_true", dest="include_all")
+    scope.add_argument("--list-sessions", action="store_true")
+    return parser.parse_args(argv)
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = parse_args(argv)
+    db_path = args.db_path
+
+    if args.list_sessions:
+        print_available_sessions(db_path)
+        return 0
+
+    scope = resolve_session_scope(
+        db_path,
+        session_id=args.session_id,
+        include_all=args.include_all,
+    )
+    opps, snaps = load_data(
+        db_path,
+        session_id=None if scope == "all" else scope,
+        include_all=scope == "all",
+    )
+    out_dir = output_dir_for_scope(scope)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    print_scope_banner(scope)
     print_session_overview(opps, snaps)
     print_profitability_summary(opps)
     print_top_paths(opps)
     print_chain_breakdown(opps)
-    out = str(OUTPUT_DIR)
+
+    out = str(out_dir)
     plot_roi_distribution(opps, out)
     plot_opportunities_timeline(opps, out)
     plot_path_frequency(opps, out)
     plot_gas_vs_profit(opps, out)
     plot_weth_price(snaps, out)
     console.print(f"\n[bold green]Charts saved to {out}/[/bold green]")
+    return 0
 
 
-def load_data(db_path: str) -> tuple[pd.DataFrame, pd.DataFrame]:
+def output_dir_for_scope(scope: str) -> Path:
+    return OUTPUT_DIR / scope
+
+
+def print_scope_banner(scope: str) -> None:
+    label = "all sessions" if scope == "all" else scope
+    console.print(Panel(f"[bold]Analysis scope:[/bold] {label}", expand=False))
+
+
+def open_connection(db_path: str) -> sqlite3.Connection:
     if not os.path.exists(db_path):
         console.print(f"[bold red]Error:[/bold red] database not found at {db_path}")
         sys.exit(1)
+    return sqlite3.connect(db_path)
 
-    con = sqlite3.connect(db_path)
 
-    opps = pd.read_sql_query(
-        "SELECT * FROM opportunities ORDER BY timestamp ASC", con
+def table_exists(con: sqlite3.Connection, table: str) -> bool:
+    row = con.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+        (table,),
+    ).fetchone()
+    return row is not None
+
+
+def column_exists(con: sqlite3.Connection, table: str, column: str) -> bool:
+    if not table_exists(con, table):
+        return False
+    rows = con.execute(f"PRAGMA table_info({table})").fetchall()
+    return any(row[1] == column for row in rows)
+
+
+def supports_sessions(con: sqlite3.Connection) -> bool:
+    return (
+        table_exists(con, "sessions")
+        and column_exists(con, "opportunities", "session_id")
+        and column_exists(con, "price_snapshots", "session_id")
     )
-    snaps = pd.read_sql_query(
-        "SELECT * FROM price_snapshots ORDER BY timestamp ASC", con
-    )
-    con.close()
+
+
+def list_sessions(db_path: str) -> list[dict[str, object]]:
+    con = open_connection(db_path)
+    try:
+        if not supports_sessions(con):
+            return []
+        rows = con.execute(
+            """
+            SELECT session_id, started_at, ended_at, active_chains, cross_chain_threshold_pct
+            FROM sessions
+            ORDER BY started_at DESC, session_id DESC
+            """
+        ).fetchall()
+    finally:
+        con.close()
+
+    return [
+        {
+            "session_id": row[0],
+            "started_at": row[1],
+            "ended_at": row[2],
+            "active_chains": row[3],
+            "cross_chain_threshold_pct": row[4],
+        }
+        for row in rows
+    ]
+
+
+def print_available_sessions(db_path: str) -> None:
+    sessions = list_sessions(db_path)
+    if not sessions:
+        console.print("No session metadata found. Use --all to analyze the whole database.")
+        return
+
+    table = Table(show_header=True, header_style="bold cyan")
+    table.add_column("Session ID")
+    table.add_column("Started")
+    table.add_column("Ended")
+    table.add_column("Chains")
+    table.add_column("Threshold %", justify="right")
+    for session in sessions:
+        started = format_timestamp(int(session["started_at"]))
+        ended_raw = session["ended_at"]
+        ended = format_timestamp(int(ended_raw)) if ended_raw is not None else "active"
+        table.add_row(
+            str(session["session_id"]),
+            started,
+            ended,
+            str(session["active_chains"]),
+            f"{float(session['cross_chain_threshold_pct']):.4f}",
+        )
+    console.print(table)
+
+
+def resolve_session_scope(
+    db_path: str,
+    session_id: str | None = None,
+    include_all: bool = False,
+) -> str:
+    if include_all:
+        return "all"
+
+    sessions = list_sessions(db_path)
+    if not sessions:
+        return "all"
+
+    if session_id is not None:
+        available = {str(session["session_id"]) for session in sessions}
+        if session_id not in available:
+            console.print(
+                f"[bold red]Error:[/bold red] session {session_id} not found in {db_path}"
+            )
+            sys.exit(1)
+        return session_id
+
+    return str(sessions[0]["session_id"])
+
+
+def load_data(
+    db_path: str,
+    session_id: str | None = None,
+    include_all: bool = False,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    con = open_connection(db_path)
+    try:
+        scoped = supports_sessions(con) and not include_all and session_id is not None
+        opp_query = "SELECT * FROM opportunities"
+        snap_query = "SELECT * FROM price_snapshots"
+        params: tuple[str, ...] = ()
+        if scoped:
+            opp_query += " WHERE session_id = ?"
+            snap_query += " WHERE session_id = ?"
+            params = (session_id,)
+        opp_query += " ORDER BY timestamp ASC"
+        snap_query += " ORDER BY timestamp ASC"
+
+        opps = pd.read_sql_query(opp_query, con, params=params)
+        snaps = pd.read_sql_query(snap_query, con, params=params)
+    finally:
+        con.close()
 
     if opps.empty and snaps.empty:
-        console.print("[bold red]Error:[/bold red] database is empty — run the bot first to collect data.")
+        console.print(
+            "[bold red]Error:[/bold red] database is empty for the requested scope."
+        )
         sys.exit(1)
 
     if not opps.empty:
@@ -96,6 +259,10 @@ def load_data(db_path: str) -> tuple[pd.DataFrame, pd.DataFrame]:
         snaps["datetime"] = pd.to_datetime(snaps["timestamp"], unit="s", utc=True)
 
     return opps, snaps
+
+
+def format_timestamp(timestamp: int) -> str:
+    return pd.to_datetime(timestamp, unit="s", utc=True).strftime("%Y-%m-%d %H:%M UTC")
 
 
 def count_tracked_blocks(snaps: pd.DataFrame) -> int:
@@ -138,7 +305,6 @@ def session_overview_stats(opps: pd.DataFrame, snaps: pd.DataFrame) -> dict[str,
 
 def print_session_overview(opps: pd.DataFrame, snaps: pd.DataFrame) -> None:
     overview = session_overview_stats(opps, snaps)
-
     text = (
         f"[bold]Total opportunities:[/bold] {overview['total_opportunities']}\n"
         f"[bold]Chains active:[/bold]       {overview['chains_active']}\n"
@@ -162,15 +328,15 @@ def print_profitability_summary(opps: pd.DataFrame) -> None:
     pct_profitable = (roi > 0).mean() * 100
     table.add_row("% profitable", f"{pct_profitable:.1f}%")
     table.add_row("Median ROI", f"{roi.median():.4f}%")
-    table.add_row("Mean ROI",   f"{roi.mean():.4f}%")
-    table.add_row("Max ROI",    f"{roi.max():.4f}%")
+    table.add_row("Mean ROI", f"{roi.mean():.4f}%")
+    table.add_row("Max ROI", f"{roi.max():.4f}%")
 
     tiers = [
-        ("< 0%",    roi < 0),
-        ("0–0.1%",  (roi >= 0) & (roi < 0.1)),
-        ("0.1–0.5%",(roi >= 0.1) & (roi < 0.5)),
-        ("0.5–1%",  (roi >= 0.5) & (roi < 1.0)),
-        ("> 1%",    roi >= 1.0),
+        ("< 0%", roi < 0),
+        ("0–0.1%", (roi >= 0) & (roi < 0.1)),
+        ("0.1–0.5%", (roi >= 0.1) & (roi < 0.5)),
+        ("0.5–1%", (roi >= 0.5) & (roi < 1.0)),
+        ("> 1%", roi >= 1.0),
     ]
     for label, mask in tiers:
         table.add_row(f"Tier {label}", str(mask.sum()))
@@ -194,9 +360,9 @@ def print_top_paths(opps: pd.DataFrame) -> None:
 
     table = Table(show_header=True, header_style="bold cyan")
     table.add_column("Path")
-    table.add_column("Count",    justify="right")
+    table.add_column("Count", justify="right")
     table.add_column("Avg ROI%", justify="right")
-    table.add_column("Best ROI%",justify="right")
+    table.add_column("Best ROI%", justify="right")
 
     for _, row in grouped.iterrows():
         table.add_row(
@@ -223,10 +389,10 @@ def print_chain_breakdown(opps: pd.DataFrame) -> None:
 
     table = Table(show_header=True, header_style="bold cyan")
     table.add_column("Chain")
-    table.add_column("Count",     justify="right")
-    table.add_column("Avg ROI%",  justify="right")
+    table.add_column("Count", justify="right")
+    table.add_column("Avg ROI%", justify="right")
     table.add_column("Best ROI%", justify="right")
-    table.add_column("Worst ROI%",justify="right")
+    table.add_column("Worst ROI%", justify="right")
 
     for _, row in grouped.iterrows():
         table.add_row(
@@ -250,8 +416,7 @@ def plot_roi_distribution(opps: pd.DataFrame, out: str) -> None:
     ax.set_xlabel("ROI (%)")
     ax.set_ylabel("Count (log scale)")
     fig.tight_layout()
-    path = os.path.join(out, "roi_distribution.png")
-    fig.savefig(path, dpi=150)
+    fig.savefig(os.path.join(out, "roi_distribution.png"), dpi=150)
     plt.close(fig)
 
 
@@ -267,8 +432,7 @@ def plot_opportunities_timeline(opps: pd.DataFrame, out: str) -> None:
     ax.set_ylabel("Count")
     fig.autofmt_xdate()
     fig.tight_layout()
-    path = os.path.join(out, "opportunities_timeline.png")
-    fig.savefig(path, dpi=150)
+    fig.savefig(os.path.join(out, "opportunities_timeline.png"), dpi=150)
     plt.close(fig)
 
 
@@ -281,8 +445,7 @@ def plot_path_frequency(opps: pd.DataFrame, out: str) -> None:
     ax.set_xlabel("Count")
     ax.set_ylabel("Path")
     fig.tight_layout()
-    path = os.path.join(out, "path_frequency.png")
-    fig.savefig(path, dpi=150)
+    fig.savefig(os.path.join(out, "path_frequency.png"), dpi=150)
     plt.close(fig)
 
 
@@ -302,17 +465,23 @@ def plot_gas_vs_profit(opps: pd.DataFrame, out: str) -> None:
         ax.axhline(0, color="red", linestyle="--", linewidth=1.2, label="Break-even")
         chains = opps["chain"].astype("category")
         handles = [
-            plt.Line2D([0], [0], marker="o", color="w",
-                       markerfacecolor=scatter.cmap(scatter.norm(i)), markersize=8, label=c)
-            for i, c in enumerate(chains.cat.categories)
+            plt.Line2D(
+                [0],
+                [0],
+                marker="o",
+                color="w",
+                markerfacecolor=scatter.cmap(scatter.norm(i)),
+                markersize=8,
+                label=chain,
+            )
+            for i, chain in enumerate(chains.cat.categories)
         ]
         ax.legend(handles=handles)
     ax.set_title("Gas Cost vs Net Profit")
     ax.set_xlabel("Gas Cost (USD)")
     ax.set_ylabel("Net Profit (ETH)")
     fig.tight_layout()
-    path = os.path.join(out, "gas_vs_profit.png")
-    fig.savefig(path, dpi=150)
+    fig.savefig(os.path.join(out, "gas_vs_profit.png"), dpi=150)
     plt.close(fig)
 
 
@@ -328,11 +497,9 @@ def plot_weth_price(snaps: pd.DataFrame, out: str) -> None:
     ax.set_ylabel("WETH Price (USD)")
     fig.autofmt_xdate()
     fig.tight_layout()
-    path = os.path.join(out, "weth_price.png")
-    fig.savefig(path, dpi=150)
+    fig.savefig(os.path.join(out, "weth_price.png"), dpi=150)
     plt.close(fig)
 
 
 if __name__ == "__main__":
-    db = sys.argv[1] if len(sys.argv) > 1 else "arb_opportunities.db"
-    main(db)
+    raise SystemExit(main())

@@ -21,8 +21,11 @@ use arb::{scan_all_opportunities, u256_to_f64};
 use config::PoolCatalogEntry;
 use cross_chain::{cross_chain_monitor, PriceRef};
 use db::OpportunityDb;
-use pools::{bootstrap_reserves, refresh_stale_pools, resolve_pool_catalog, run_subscriptions, verify_pool_tokens};
-use types::{ChainId, PoolKey, PoolState, SessionStats};
+use pools::{
+    bootstrap_reserves, refresh_stale_pools, resolve_pool_catalog, run_subscriptions,
+    verify_pool_tokens,
+};
+use types::{ChainId, PoolKey, PoolState, SessionInfo, SessionStats};
 
 // ─── Entry point ──────────────────────────────────────────────────────────────
 
@@ -47,29 +50,54 @@ async fn main() -> Result<()> {
 
     info!("arb-bot starting on {} chain(s)", chains.len());
 
+    let threshold_pct = std::env::var("CROSS_CHAIN_THRESHOLD_PCT")
+        .ok()
+        .and_then(|s| s.parse::<f64>().ok())
+        .unwrap_or(0.1);
+
     let db = Arc::new(
         OpportunityDb::open("arb_opportunities.db")
             .wrap_err("failed to open opportunity database")?,
     );
     info!(path = "arb_opportunities.db", "database opened");
 
+    let session = build_session_info();
+    let active_chain_names = chains
+        .iter()
+        .map(|(chain, _)| chain.name())
+        .collect::<Vec<_>>()
+        .join(",");
+    db.create_session(&session, &active_chain_names, threshold_pct)
+        .wrap_err("failed to create session record")?;
+    info!(
+        session_id = session.id,
+        active_chains = active_chain_names,
+        "session started"
+    );
+    let session = Arc::new(session);
+
     let stats: Arc<RwLock<SessionStats>> = Arc::new(RwLock::new(SessionStats::default()));
     let start_time = Instant::now();
-
-    let threshold_pct = std::env::var("CROSS_CHAIN_THRESHOLD_PCT")
-        .ok()
-        .and_then(|s| s.parse::<f64>().ok())
-        .unwrap_or(0.1);
 
     let mut price_refs: Vec<(ChainId, PriceRef)> = Vec::new();
 
     for (chain, ws_url) in chains {
         let price_ref: PriceRef = Arc::new(RwLock::new(None));
         price_refs.push((chain, price_ref.clone()));
-        if let Err(e) =
-            spawn_chain_tasks(chain, ws_url, stats.clone(), price_ref, db.clone()).await
+        if let Err(e) = spawn_chain_tasks(
+            chain,
+            ws_url,
+            stats.clone(),
+            price_ref,
+            db.clone(),
+            session.clone(),
+        )
+        .await
         {
-            error!(chain = chain.name(), "chain startup failed, skipping: {e:#}");
+            error!(
+                chain = chain.name(),
+                "chain startup failed, skipping: {e:#}"
+            );
         }
     }
 
@@ -79,9 +107,21 @@ async fn main() -> Result<()> {
         .await
         .wrap_err("failed to listen for ctrl_c")?;
 
+    let ended_at = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    if let Err(e) = db.close_session(&session.id, ended_at) {
+        warn!(
+            session_id = session.id,
+            "failed to close session cleanly: {e:#}"
+        );
+    }
+
     let elapsed = start_time.elapsed();
     let s = stats.read().await;
     println!("\n=== Session Summary ===");
+    println!("Session ID:           {}", session.id);
     println!("Blocks scanned:       {}", s.blocks_scanned);
     println!("Opportunities found:  {}", s.opps_found);
     match &s.best_opp {
@@ -90,7 +130,10 @@ async fn main() -> Result<()> {
             println!("Best opportunity:");
             println!("  Chain:                {}", opp.chain.name());
             println!("  Path:                 {}", opp.path);
-            println!("  Input:                {:.4} ETH", u256_to_f64(opp.input_weth) / 1e18);
+            println!(
+                "  Input:                {:.4} ETH",
+                u256_to_f64(opp.input_weth) / 1e18
+            );
             println!("  Estimated net (wei):  {}", opp.estimated_net_after_gas);
             println!("  ROI:                  {:.4}%", opp.roi_pct);
             println!("  Gas cost:             ${:.2}", opp.gas_cost_usd);
@@ -100,11 +143,15 @@ async fn main() -> Result<()> {
     println!("======================");
 
     // ── Phase 3: Research summary ──────────────────────────────────────────────
-    let by_count = db.top_paths_by_count(5).unwrap_or_default();
-    let by_roi = db.top_paths_by_avg_roi(5).unwrap_or_default();
+    let by_count = db
+        .top_paths_by_count(Some(&session.id), 5)
+        .unwrap_or_default();
+    let by_roi = db
+        .top_paths_by_avg_roi(Some(&session.id), 5)
+        .unwrap_or_default();
 
     if by_count.is_empty() {
-        println!("\nNo data recorded.");
+        println!("\nNo opportunities recorded for this session.");
     } else {
         println!("\n=== Research Summary ===");
         println!("Top paths by frequency:");
@@ -119,8 +166,8 @@ async fn main() -> Result<()> {
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
             .as_secs();
-        let csv_path = format!("arb_opportunities_{csv_ts}.csv");
-        match db.export_csv(&csv_path) {
+        let csv_path = format!("arb_opportunities_{}_{}.csv", session.id, csv_ts);
+        match db.export_csv(Some(&session.id), &csv_path) {
             Ok(()) => println!("\nExported: {csv_path}"),
             Err(e) => println!("\nCSV export failed: {e:#}"),
         }
@@ -164,6 +211,7 @@ async fn spawn_chain_tasks(
     stats: Arc<RwLock<SessionStats>>,
     weth_usd_price: PriceRef,
     db: Arc<OpportunityDb>,
+    session: Arc<SessionInfo>,
 ) -> Result<()> {
     let provider = Arc::new(
         Provider::<Ws>::connect(&ws_url)
@@ -275,6 +323,7 @@ async fn spawn_chain_tasks(
         let weth_usd_price_blocks = weth_usd_price.clone();
         let db_blocks = db.clone();
         let arb_tx_blocks = arb_tx.clone();
+        let session_id_blocks = session.id.clone();
         tokio::spawn(async move {
             let mut backoff = Duration::from_secs(1);
             loop {
@@ -341,6 +390,7 @@ async fn spawn_chain_tasks(
                                     {
                                         *weth_usd_price_blocks.write().await = Some(p);
                                         if let Err(e) = db_blocks.insert_price_snapshot(
+                                            &session_id_blocks,
                                             chain.name(),
                                             block_num,
                                             p,
@@ -387,6 +437,7 @@ async fn spawn_chain_tasks(
         let stats_arb = stats.clone();
         let paths_arb = paths.clone();
         let db_arb = db.clone();
+        let session_id_arb = session.id.clone();
         tokio::spawn(async move {
             loop {
                 if arb_rx.changed().await.is_err() {
@@ -414,7 +465,7 @@ async fn spawn_chain_tasks(
                 // Insert profitable opportunities before acquiring the stats lock.
                 for opp in &opps {
                     if opp.estimated_net_after_gas > 0 {
-                        if let Err(e) = db_arb.insert_opportunity(opp) {
+                        if let Err(e) = db_arb.insert_opportunity(&session_id_arb, opp) {
                             warn!(chain = chain.name(), "insert_opportunity failed: {e:#}");
                         }
                     }
@@ -454,6 +505,16 @@ async fn spawn_chain_tasks(
     }
 
     Ok(())
+}
+
+fn build_session_info() -> SessionInfo {
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default();
+    SessionInfo {
+        id: format!("session-{}", now.as_millis()),
+        started_at: now.as_secs(),
+    }
 }
 
 // ─── Price helpers ────────────────────────────────────────────────────────────

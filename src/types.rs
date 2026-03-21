@@ -100,6 +100,12 @@ pub struct ArbOpportunity {
     pub timestamp: u64,
 }
 
+#[derive(Debug, Clone)]
+pub struct SessionInfo {
+    pub id: String,
+    pub started_at: u64,
+}
+
 #[derive(Debug, Default)]
 pub struct SessionStats {
     pub blocks_scanned: u64,
