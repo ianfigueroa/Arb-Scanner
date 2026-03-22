@@ -4,7 +4,10 @@ from contextlib import contextmanager
 from pathlib import Path
 from uuid import uuid4
 
+import matplotlib.pyplot as plt
+
 from analysis.analyze import (
+    annotate_empty_axis,
     count_tracked_blocks,
     list_sessions,
     load_data,
@@ -23,7 +26,8 @@ def seed_db(db_path: Path) -> None:
             started_at INTEGER NOT NULL,
             ended_at INTEGER NULL,
             active_chains TEXT NOT NULL,
-            cross_chain_threshold_pct REAL NOT NULL
+            cross_chain_threshold_pct REAL NOT NULL,
+            status TEXT NOT NULL
         );
 
         CREATE TABLE opportunities (
@@ -49,13 +53,13 @@ def seed_db(db_path: Path) -> None:
         """
     )
     sessions = [
-        ("session-older", 1_700_000_000, 1_700_000_300, "ethereum", 0.1),
-        ("session-latest", 1_700_000_600, None, "ethereum,base", 0.2),
+        ("session-older", 1_700_000_000, 1_700_000_300, "ethereum", 0.1, "completed"),
+        ("session-latest", 1_700_000_600, None, "ethereum,base", 0.2, "active"),
     ]
     con.executemany(
         """
-        INSERT INTO sessions (session_id, started_at, ended_at, active_chains, cross_chain_threshold_pct)
-        VALUES (?, ?, ?, ?, ?)
+        INSERT INTO sessions (session_id, started_at, ended_at, active_chains, cross_chain_threshold_pct, status)
+        VALUES (?, ?, ?, ?, ?, ?)
         """,
         sessions,
     )
@@ -170,6 +174,20 @@ class AnalyzeTests(unittest.TestCase):
             sessions = list_sessions(str(db_path))
 
             self.assertEqual([session["session_id"] for session in sessions], ["session-latest", "session-older"])
+            self.assertEqual([session["status"] for session in sessions], ["active", "completed"])
+
+    def test_annotate_empty_axis_adds_placeholder_message(self) -> None:
+        fig, ax = plt.subplots()
+        try:
+            annotate_empty_axis(ax, "No opportunities recorded for this session.")
+
+            self.assertEqual(len(ax.texts), 1)
+            self.assertEqual(
+                ax.texts[0].get_text(),
+                "No opportunities recorded for this session.",
+            )
+        finally:
+            plt.close(fig)
 
 
 if __name__ == "__main__":

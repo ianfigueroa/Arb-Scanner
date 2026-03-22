@@ -29,6 +29,8 @@ use types::{ChainId, PoolKey, PoolState, SessionInfo, SessionStats};
 
 // ─── Entry point ──────────────────────────────────────────────────────────────
 
+const DEFAULT_DB_PATH: &str = "arb_opportunities.db";
+
 #[tokio::main]
 async fn main() -> Result<()> {
     tracing_subscriber::fmt()
@@ -55,13 +57,21 @@ async fn main() -> Result<()> {
         .and_then(|s| s.parse::<f64>().ok())
         .unwrap_or(0.1);
 
-    let db = Arc::new(
-        OpportunityDb::open("arb_opportunities.db")
-            .wrap_err("failed to open opportunity database")?,
-    );
-    info!(path = "arb_opportunities.db", "database opened");
-
     let session = build_session_info();
+    let db_path = database_path();
+    let db =
+        Arc::new(OpportunityDb::open(&db_path).wrap_err("failed to open opportunity database")?);
+    info!(path = db_path, "database opened");
+    let recovered_sessions = db
+        .recover_incomplete_sessions(session.started_at)
+        .wrap_err("failed to recover stale sessions")?;
+    if recovered_sessions > 0 {
+        warn!(
+            recovered_sessions,
+            recovered_at = session.started_at,
+            "recovered stale sessions from an unclean shutdown"
+        );
+    }
     let active_chain_names = chains
         .iter()
         .map(|(chain, _)| chain.name())
@@ -517,6 +527,16 @@ fn build_session_info() -> SessionInfo {
     }
 }
 
+fn database_path() -> String {
+    resolve_database_path(std::env::var("ARB_DB_PATH").ok())
+}
+
+fn resolve_database_path(raw: Option<String>) -> String {
+    raw.map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| DEFAULT_DB_PATH.to_string())
+}
+
 // ─── Price helpers ────────────────────────────────────────────────────────────
 
 /// Derive the WETH/USD price from the runtime-resolved catalog's WETH/USDC pool.
@@ -556,5 +576,24 @@ fn build_chain_price_line(
     match chain_weth_usd_price(chain, snap, catalog) {
         Some(p) => format!("WETH: ${p:.2}"),
         None => "WETH: N/A".to_string(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{resolve_database_path, DEFAULT_DB_PATH};
+
+    #[test]
+    fn test_resolve_database_path_uses_override_when_present() {
+        let db_path = resolve_database_path(Some("custom-session.db".to_string()));
+
+        assert_eq!(db_path, "custom-session.db");
+    }
+
+    #[test]
+    fn test_resolve_database_path_falls_back_for_blank_values() {
+        let db_path = resolve_database_path(Some("   ".to_string()));
+
+        assert_eq!(db_path, DEFAULT_DB_PATH);
     }
 }

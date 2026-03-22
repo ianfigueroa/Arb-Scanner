@@ -9,6 +9,9 @@ use crate::arb::u256_to_f64;
 use crate::types::{ArbOpportunity, SessionInfo};
 
 const LEGACY_SESSION_ID: &str = "legacy";
+const SESSION_STATUS_ACTIVE: &str = "active";
+const SESSION_STATUS_COMPLETED: &str = "completed";
+const SESSION_STATUS_RECOVERED: &str = "recovered";
 
 #[cfg_attr(not(test), allow(dead_code))]
 #[derive(Debug, Clone, PartialEq)]
@@ -18,6 +21,7 @@ pub struct SessionRecord {
     pub ended_at: Option<u64>,
     pub active_chains: String,
     pub cross_chain_threshold_pct: f64,
+    pub status: String,
 }
 
 #[derive(Clone)]
@@ -56,7 +60,8 @@ impl OpportunityDb {
                 started_at                 INTEGER NOT NULL,
                 ended_at                   INTEGER NULL,
                 active_chains              TEXT NOT NULL,
-                cross_chain_threshold_pct  REAL NOT NULL
+                cross_chain_threshold_pct  REAL NOT NULL,
+                status                     TEXT NOT NULL DEFAULT 'active'
             );
             CREATE TABLE IF NOT EXISTS opportunities (
                 id            INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -80,9 +85,12 @@ impl OpportunityDb {
         )
         .wrap_err("failed to create tables")?;
 
+        ensure_column(&conn, "sessions", "status", "TEXT")?;
         ensure_column(&conn, "opportunities", "session_id", "TEXT")?;
         ensure_column(&conn, "price_snapshots", "session_id", "TEXT")?;
         backfill_legacy_session(&conn)?;
+        backfill_session_status(&conn)?;
+        purge_orphaned_legacy_session(&conn)?;
         conn.execute_batch(
             "CREATE INDEX IF NOT EXISTS idx_opportunities_session_id ON opportunities(session_id);
              CREATE INDEX IF NOT EXISTS idx_price_snapshots_session_id ON price_snapshots(session_id);
@@ -103,13 +111,14 @@ impl OpportunityDb {
         let conn = self.conn.lock().unwrap();
         conn.execute(
             "INSERT INTO sessions (
-                session_id, started_at, ended_at, active_chains, cross_chain_threshold_pct
-            ) VALUES (?1, ?2, NULL, ?3, ?4)",
+                session_id, started_at, ended_at, active_chains, cross_chain_threshold_pct, status
+            ) VALUES (?1, ?2, NULL, ?3, ?4, ?5)",
             params![
                 session.id,
                 started_at,
                 active_chains,
                 cross_chain_threshold_pct,
+                SESSION_STATUS_ACTIVE,
             ],
         )
         .wrap_err("create_session failed")?;
@@ -120,11 +129,26 @@ impl OpportunityDb {
         let ended_at = checked_u64_to_i64(ended_at, "ended_at")?;
         let conn = self.conn.lock().unwrap();
         conn.execute(
-            "UPDATE sessions SET ended_at = ?1 WHERE session_id = ?2",
-            params![ended_at, session_id],
+            "UPDATE sessions SET ended_at = ?1, status = ?2 WHERE session_id = ?3",
+            params![ended_at, SESSION_STATUS_COMPLETED, session_id],
         )
         .wrap_err("close_session failed")?;
         Ok(())
+    }
+
+    pub fn recover_incomplete_sessions(&self, ended_at: u64) -> eyre::Result<u64> {
+        let ended_at = checked_u64_to_i64(ended_at, "ended_at")?;
+        let conn = self.conn.lock().unwrap();
+        let updated = conn
+            .execute(
+                "UPDATE sessions
+                 SET ended_at = COALESCE(ended_at, ?1), status = ?2
+                 WHERE status = ?3
+                    OR ((status IS NULL OR TRIM(status) = '') AND ended_at IS NULL)",
+                params![ended_at, SESSION_STATUS_RECOVERED, SESSION_STATUS_ACTIVE,],
+            )
+            .wrap_err("recover_incomplete_sessions failed")?;
+        Ok(updated as u64)
     }
 
     #[cfg_attr(not(test), allow(dead_code))]
@@ -147,7 +171,7 @@ impl OpportunityDb {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn
             .prepare(
-                "SELECT session_id, started_at, ended_at, active_chains, cross_chain_threshold_pct
+                "SELECT session_id, started_at, ended_at, active_chains, cross_chain_threshold_pct, status
                  FROM sessions
                  ORDER BY started_at DESC, session_id DESC",
             )
@@ -164,6 +188,7 @@ impl OpportunityDb {
                         .transpose()?,
                     active_chains: row.get::<_, String>(3)?,
                     cross_chain_threshold_pct: row.get::<_, f64>(4)?,
+                    status: row.get::<_, String>(5)?,
                 })
             })
             .wrap_err("query list_sessions failed")?
@@ -412,28 +437,42 @@ fn ensure_column(
 }
 
 fn backfill_legacy_session(conn: &Connection) -> eyre::Result<()> {
+    if !legacy_backfill_needed(conn)? {
+        return Ok(());
+    }
     let metadata = legacy_session_metadata(conn)?;
+    if metadata.started_at == 0 && metadata.ended_at.is_none() && metadata.active_chains == "legacy"
+    {
+        return Ok(());
+    }
     let started_at = checked_u64_to_i64(metadata.started_at, "started_at")?;
     let ended_at = metadata
         .ended_at
         .map(|value| checked_u64_to_i64(value, "ended_at"))
         .transpose()?;
+    let status = if metadata.ended_at.is_some() {
+        SESSION_STATUS_COMPLETED
+    } else {
+        SESSION_STATUS_ACTIVE
+    };
 
     conn.execute(
         "INSERT INTO sessions (
-            session_id, started_at, ended_at, active_chains, cross_chain_threshold_pct
-         ) VALUES (?1, ?2, ?3, ?4, ?5)
+            session_id, started_at, ended_at, active_chains, cross_chain_threshold_pct, status
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)
          ON CONFLICT(session_id) DO UPDATE SET
             started_at = excluded.started_at,
             ended_at = excluded.ended_at,
             active_chains = excluded.active_chains,
-            cross_chain_threshold_pct = excluded.cross_chain_threshold_pct",
+            cross_chain_threshold_pct = excluded.cross_chain_threshold_pct,
+            status = excluded.status",
         params![
             LEGACY_SESSION_ID,
             started_at,
             ended_at,
             metadata.active_chains,
             0.0f64,
+            status,
         ],
     )
     .wrap_err("upsert legacy session failed")?;
@@ -453,6 +492,59 @@ fn backfill_legacy_session(conn: &Connection) -> eyre::Result<()> {
     )
     .wrap_err("backfill price_snapshots legacy session failed")?;
     Ok(())
+}
+
+fn legacy_backfill_needed(conn: &Connection) -> eyre::Result<bool> {
+    let missing_opportunities = count_missing_session_ids(conn, "opportunities")?;
+    let missing_price_snapshots = count_missing_session_ids(conn, "price_snapshots")?;
+    Ok(missing_opportunities > 0 || missing_price_snapshots > 0)
+}
+
+fn count_missing_session_ids(conn: &Connection, table: &str) -> eyre::Result<i64> {
+    let query =
+        format!("SELECT COUNT(*) FROM {table} WHERE session_id IS NULL OR TRIM(session_id) = ''");
+    conn.query_row(&query, [], |row| row.get::<_, i64>(0))
+        .wrap_err_with(|| format!("count missing session ids failed for {table}"))
+}
+
+fn backfill_session_status(conn: &Connection) -> eyre::Result<()> {
+    conn.execute(
+        "UPDATE sessions
+         SET status = CASE
+             WHEN ended_at IS NULL THEN ?1
+             ELSE ?2
+         END
+         WHERE status IS NULL
+            OR TRIM(status) = ''
+            OR status NOT IN (?1, ?2, ?3)",
+        params![
+            SESSION_STATUS_ACTIVE,
+            SESSION_STATUS_COMPLETED,
+            SESSION_STATUS_RECOVERED,
+        ],
+    )
+    .wrap_err("backfill session status failed")?;
+    Ok(())
+}
+
+fn purge_orphaned_legacy_session(conn: &Connection) -> eyre::Result<()> {
+    let legacy_opportunities = count_rows_for_session(conn, "opportunities", LEGACY_SESSION_ID)?;
+    let legacy_price_snapshots =
+        count_rows_for_session(conn, "price_snapshots", LEGACY_SESSION_ID)?;
+    if legacy_opportunities == 0 && legacy_price_snapshots == 0 {
+        conn.execute(
+            "DELETE FROM sessions WHERE session_id = ?1",
+            [LEGACY_SESSION_ID],
+        )
+        .wrap_err("delete orphaned legacy session failed")?;
+    }
+    Ok(())
+}
+
+fn count_rows_for_session(conn: &Connection, table: &str, session_id: &str) -> eyre::Result<i64> {
+    let query = format!("SELECT COUNT(*) FROM {table} WHERE session_id = ?1");
+    conn.query_row(&query, [session_id], |row| row.get::<_, i64>(0))
+        .wrap_err_with(|| format!("count rows for session failed in {table}"))
 }
 
 struct LegacySessionMetadata {
@@ -567,13 +659,70 @@ mod tests {
         );
 
         let sessions = db.list_sessions().unwrap();
-        assert_eq!(sessions.len(), 3);
+        assert_eq!(sessions.len(), 2);
         assert_eq!(sessions[0].session_id, "session-2");
         assert_eq!(sessions[0].active_chains, "ethereum,arbitrum");
+        assert_eq!(sessions[0].status, "active");
 
         db.close_session("session-2", 25).unwrap();
         let sessions = db.list_sessions().unwrap();
         assert_eq!(sessions[0].ended_at, Some(25));
+        assert_eq!(sessions[0].status, "completed");
+    }
+
+    #[test]
+    fn test_open_empty_db_does_not_create_legacy_session() {
+        let db = OpportunityDb::open(":memory:").unwrap();
+
+        let sessions = db.list_sessions().unwrap();
+
+        assert!(sessions.is_empty());
+    }
+
+    #[test]
+    fn test_recover_incomplete_sessions_marks_active_rows_recovered() {
+        let db = OpportunityDb::open(":memory:").unwrap();
+        let recovered = make_session("session-recovered", 10);
+        let completed = make_session("session-completed", 20);
+        db.create_session(&recovered, "ethereum", 0.1).unwrap();
+        db.create_session(&completed, "base", 0.1).unwrap();
+        db.close_session(&completed.id, 25).unwrap();
+
+        let recovered_count = db.recover_incomplete_sessions(30).unwrap();
+
+        assert_eq!(recovered_count, 1);
+        let sessions = db.list_sessions().unwrap();
+        let recovered_session = sessions
+            .iter()
+            .find(|session| session.session_id == recovered.id)
+            .unwrap();
+        assert_eq!(recovered_session.ended_at, Some(30));
+        assert_eq!(recovered_session.status, "recovered");
+        let completed_session = sessions
+            .iter()
+            .find(|session| session.session_id == completed.id)
+            .unwrap();
+        assert_eq!(completed_session.ended_at, Some(25));
+        assert_eq!(completed_session.status, "completed");
+    }
+
+    #[test]
+    fn test_reopening_session_aware_db_does_not_create_legacy_session() {
+        let path = std::env::temp_dir().join("arb_session_aware_reopen.db");
+        let _ = std::fs::remove_file(&path);
+
+        let db = OpportunityDb::open(path.to_str().unwrap()).unwrap();
+        let session = make_session("session-1", 1_700_000_000);
+        db.create_session(&session, "ethereum", 0.1).unwrap();
+        db.insert_price_snapshot(&session.id, "ethereum", 21_000_001, 3200.0)
+            .unwrap();
+        drop(db);
+
+        let reopened = OpportunityDb::open(path.to_str().unwrap()).unwrap();
+        let sessions = reopened.list_sessions().unwrap();
+
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(sessions[0].session_id, "session-1");
     }
 
     #[test]
@@ -701,13 +850,20 @@ mod tests {
         assert_eq!(session_id, LEGACY_SESSION_ID);
         let legacy_session = conn
             .query_row(
-                "SELECT session_id, active_chains FROM sessions WHERE session_id = ?1",
+                "SELECT session_id, active_chains, status FROM sessions WHERE session_id = ?1",
                 [LEGACY_SESSION_ID],
-                |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                    ))
+                },
             )
             .unwrap();
         assert_eq!(legacy_session.0, LEGACY_SESSION_ID);
         assert_eq!(legacy_session.1, "ethereum");
+        assert_eq!(legacy_session.2, "completed");
     }
 
     #[test]

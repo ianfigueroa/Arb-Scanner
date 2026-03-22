@@ -58,6 +58,8 @@ except ImportError:
 
 console = Console()
 OUTPUT_DIR = Path(__file__).parent / "output"
+EMPTY_OPPORTUNITIES_MESSAGE = "No opportunities recorded for this session."
+EMPTY_SNAPSHOTS_MESSAGE = "No price snapshots recorded for this scope."
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -151,26 +153,39 @@ def list_sessions(db_path: str) -> list[dict[str, object]]:
     try:
         if not supports_sessions(con):
             return []
-        rows = con.execute(
-            """
-            SELECT session_id, started_at, ended_at, active_chains, cross_chain_threshold_pct
-            FROM sessions
-            ORDER BY started_at DESC, session_id DESC
-            """
-        ).fetchall()
+        if column_exists(con, "sessions", "status"):
+            rows = con.execute(
+                """
+                SELECT session_id, started_at, ended_at, active_chains, cross_chain_threshold_pct, status
+                FROM sessions
+                ORDER BY started_at DESC, session_id DESC
+                """
+            ).fetchall()
+        else:
+            rows = con.execute(
+                """
+                SELECT session_id, started_at, ended_at, active_chains, cross_chain_threshold_pct
+                FROM sessions
+                ORDER BY started_at DESC, session_id DESC
+                """
+            ).fetchall()
     finally:
         con.close()
 
-    return [
-        {
-            "session_id": row[0],
-            "started_at": row[1],
-            "ended_at": row[2],
-            "active_chains": row[3],
-            "cross_chain_threshold_pct": row[4],
-        }
-        for row in rows
-    ]
+    sessions: list[dict[str, object]] = []
+    for row in rows:
+        status = row[5] if len(row) > 5 else ("active" if row[2] is None else "completed")
+        sessions.append(
+            {
+                "session_id": row[0],
+                "started_at": row[1],
+                "ended_at": row[2],
+                "active_chains": row[3],
+                "cross_chain_threshold_pct": row[4],
+                "status": status,
+            }
+        )
+    return sessions
 
 
 def print_available_sessions(db_path: str) -> None:
@@ -183,16 +198,18 @@ def print_available_sessions(db_path: str) -> None:
     table.add_column("Session ID")
     table.add_column("Started")
     table.add_column("Ended")
+    table.add_column("Status")
     table.add_column("Chains")
     table.add_column("Threshold %", justify="right")
     for session in sessions:
         started = format_timestamp(int(session["started_at"]))
         ended_raw = session["ended_at"]
-        ended = format_timestamp(int(ended_raw)) if ended_raw is not None else "active"
+        ended = format_timestamp(int(ended_raw)) if ended_raw is not None else "-"
         table.add_row(
             str(session["session_id"]),
             started,
             ended,
+            str(session["status"]),
             str(session["active_chains"]),
             f"{float(session['cross_chain_threshold_pct']):.4f}",
         )
@@ -405,6 +422,22 @@ def print_chain_breakdown(opps: pd.DataFrame) -> None:
     console.print(table)
 
 
+def annotate_empty_axis(ax, message: str) -> None:
+    ax.text(
+        0.5,
+        0.5,
+        message,
+        transform=ax.transAxes,
+        ha="center",
+        va="center",
+        fontsize=11,
+        color="dimgray",
+        wrap=True,
+    )
+    ax.set_xticks([])
+    ax.set_yticks([])
+
+
 def plot_roi_distribution(opps: pd.DataFrame, out: str) -> None:
     fig, ax = plt.subplots(figsize=(10, 5))
     if not opps.empty:
@@ -412,6 +445,8 @@ def plot_roi_distribution(opps: pd.DataFrame, out: str) -> None:
         ax.axvline(0, color="red", linestyle="--", linewidth=1.5, label="Break-even")
         ax.set_yscale("log")
         ax.legend()
+    else:
+        annotate_empty_axis(ax, EMPTY_OPPORTUNITIES_MESSAGE)
     ax.set_title("ROI Distribution Across All Opportunities")
     ax.set_xlabel("ROI (%)")
     ax.set_ylabel("Count (log scale)")
@@ -427,6 +462,8 @@ def plot_opportunities_timeline(opps: pd.DataFrame, out: str) -> None:
             series = group.set_index("datetime")["roi_pct"].resample("1h").count()
             ax.plot(series.index, series.values, label=chain, linewidth=1.5)
         ax.legend()
+    else:
+        annotate_empty_axis(ax, EMPTY_OPPORTUNITIES_MESSAGE)
     ax.set_title("Opportunities per Hour by Chain")
     ax.set_xlabel("Time (UTC)")
     ax.set_ylabel("Count")
@@ -441,6 +478,8 @@ def plot_path_frequency(opps: pd.DataFrame, out: str) -> None:
     if not opps.empty:
         counts = opps["path"].value_counts().head(15)
         counts[::-1].plot(kind="barh", ax=ax, color="steelblue")
+    else:
+        annotate_empty_axis(ax, EMPTY_OPPORTUNITIES_MESSAGE)
     ax.set_title("Top 15 Paths by Frequency")
     ax.set_xlabel("Count")
     ax.set_ylabel("Path")
@@ -477,6 +516,8 @@ def plot_gas_vs_profit(opps: pd.DataFrame, out: str) -> None:
             for i, chain in enumerate(chains.cat.categories)
         ]
         ax.legend(handles=handles)
+    else:
+        annotate_empty_axis(ax, EMPTY_OPPORTUNITIES_MESSAGE)
     ax.set_title("Gas Cost vs Net Profit")
     ax.set_xlabel("Gas Cost (USD)")
     ax.set_ylabel("Net Profit (ETH)")
@@ -492,6 +533,8 @@ def plot_weth_price(snaps: pd.DataFrame, out: str) -> None:
             series = group.set_index("datetime")["weth_usd"]
             ax.plot(series.index, series.values, label=chain, linewidth=1.2)
         ax.legend()
+    else:
+        annotate_empty_axis(ax, EMPTY_SNAPSHOTS_MESSAGE)
     ax.set_title("WETH/USD Price by Chain Over Time")
     ax.set_xlabel("Time (UTC)")
     ax.set_ylabel("WETH Price (USD)")
