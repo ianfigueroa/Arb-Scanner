@@ -51,6 +51,7 @@ BASE_WS_URL=wss://base-mainnet.g.alchemy.com/v2/your_key
 POLYGON_WS_URL=wss://polygon-mainnet.g.alchemy.com/v2/your_key
 
 CROSS_CHAIN_THRESHOLD_PCT=0.1
+ARB_DB_PATH=arb_opportunities.db
 ```
 
 Any chain without a URL is skipped automatically.
@@ -74,7 +75,7 @@ By default, the analysis script looks at the latest recorded session and writes 
 
 ## Reading The Logs
 
-Startup:
+Startup example:
 
 ```text
 INFO arb_bot: database opened path="arb_opportunities.db"
@@ -84,26 +85,32 @@ INFO arb_bot: reserves bootstrapped chain="ethereum"
 INFO arb_bot::pools: subscribed to pool events chain="ethereum"
 ```
 
-Per block:
+Per-block example:
 
 ```text
 INFO arb_bot: WETH: $2150.50 chain="ethereum" block=24708245 gas_gwei="0.04"
 INFO arb_bot: WETH: $2149.38 chain="arbitrum" block=444231730 gas_gwei="0.02"
 ```
 
-Cross-chain alert:
+Cross-chain alert example:
 
 ```text
 WARN arb_bot::cross_chain: [CROSS-CHAIN ALERT] ethereum=$2150.50 arbitrum=$2149.38 base=$2154.28 spread="0.2281%"
 ```
 
-Opportunity log:
+Recovery warning example:
+
+```text
+WARN arb_bot: recovered stale sessions from an unclean shutdown recovered_sessions=1 recovered_at=1774140134
+```
+
+Illustrative opportunity log:
 
 ```text
 INFO arb_bot: [OPPORTUNITY] chain="ethereum" path="WETH→USDC→DAI→WETH" roi_pct="0.0023" gas_cost_usd="1.40"
 ```
 
-Shutdown summary:
+Illustrative shutdown summary when a session finds profitable opportunities:
 
 ```text
 === Session Summary ===
@@ -121,10 +128,11 @@ Runtime:              3721.4s
 ======================
 ```
 
-All runs write into `arb_opportunities.db`. The database is session-aware:
+All runs write into `ARB_DB_PATH`, which defaults to `arb_opportunities.db`. The database is session-aware:
 - each scanner start creates a `sessions` row
 - `opportunities` rows are tagged with `session_id`
 - `price_snapshots` rows are tagged with `session_id`
+- if the previous run ended uncleanly, the next startup marks those stale sessions as `recovered`
 
 ## Session-Based Analysis
 
@@ -145,6 +153,8 @@ List available sessions:
 ```bash
 python analysis/analyze.py arb_opportunities.db --list-sessions
 ```
+
+`--list-sessions` shows the session status so it is easy to tell the difference between active, completed, and recovered runs.
 
 Analyze the full historical database instead of one session:
 
@@ -209,6 +219,7 @@ analysis/
 - V3 quotes do not model full price impact across liquidity ranges.
 - Sessions are stored in one SQLite file, which is convenient locally but not a great long-term format for higher-volume research.
 - Observability is still pretty simple: logs and SQLite, no metrics backend or external alerting yet.
+- The committed live verification data currently demonstrates pricing, spread detection, persistence, and chart generation. It does not yet include a stored profitable opportunity session.
 
 ## Roadmap
 
@@ -216,7 +227,7 @@ analysis/
 - Add better observability, including structured metrics and richer stale-pool diagnostics.
 - Expand path coverage and improve quote accuracy for deeper research runs.
 - Evaluate an `alloy-rs` migration if the runtime grows beyond the current `ethers-rs` footprint.
-- Cut formal GitHub releases starting with `v0.1.0`.
+- Publish GitHub release pages for future tags and keep the release notes aligned with the latest live verification run.
 
 ## Tests
 
@@ -228,5 +239,14 @@ python -m unittest analysis.test_analyze
 ```
 
 Verified locally:
-- `cargo test`: 85 passing tests
-- `python -m unittest analysis.test_analyze`: 7 passing tests
+- `cargo test`: 90 passing tests
+- `python -m unittest analysis.test_analyze`: 8 passing tests
+
+Latest smoke verification:
+- ran the scanner against an isolated temp DB using `ARB_DB_PATH`
+- forced an unclean stop, restarted it, and confirmed the first session was marked `recovered`
+- latest DB prices matched the live logs on restart:
+  - Ethereum: `2087.32`
+  - Arbitrum: `2088.25`
+  - Base: `2089.14`
+  - Polygon: `2086.24`

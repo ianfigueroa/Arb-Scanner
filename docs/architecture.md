@@ -50,7 +50,7 @@ flowchart LR
 
 ## Runtime Responsibilities
 
-- `main.rs` loads configuration, creates a new session record, starts one chain task per enabled WebSocket RPC, and prints the session summary on shutdown.
+- `main.rs` loads configuration, recovers stale sessions from prior unclean exits, creates a new session record, starts one chain task per enabled WebSocket RPC, and prints the session summary on shutdown.
 - `pools.rs` resolves pools, verifies token ordering, bootstraps reserve state, subscribes to pool events, and refreshes stale pools.
 - `arb.rs` runs the configured triangular paths and estimates profitability after gas.
 - `cross_chain.rs` compares per-chain WETH prices and emits spread alerts.
@@ -58,7 +58,7 @@ flowchart LR
 
 ## Data Model
 
-- `sessions`: one row per scanner run with `session_id`, `started_at`, `ended_at`, active chains, and the configured cross-chain alert threshold.
+- `sessions`: one row per scanner run with `session_id`, `started_at`, `ended_at`, active chains, the configured cross-chain alert threshold, and a lifecycle status such as `active`, `completed`, or `recovered`.
 - `opportunities`: profitable opportunities only, tagged with `session_id`.
 - `price_snapshots`: block-level WETH reference prices, tagged with `session_id`.
 
