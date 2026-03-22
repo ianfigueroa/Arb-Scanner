@@ -2,7 +2,7 @@
 
 All notable changes to this project will be documented in this file.
 
-## Unreleased
+## 0.1.2 - 2026-03-21
 
 - Added configurable SQLite output via `ARB_DB_PATH`.
 - Added session lifecycle status tracking and startup recovery for stale sessions after unclean exits.
