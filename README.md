@@ -210,6 +210,7 @@ analysis/
 - SQLite is good enough for this kind of local research workflow and easy to inspect by hand.
 - Pool coverage is curated, not exhaustive. That keeps the startup path manageable, but it is not a full market search surface.
 - The Uniswap V3 quote uses marginal price from `sqrtPriceX96`, which is useful for monitoring but not a full execution model.
+- Curve quotes call the pool's on-chain `get_dy` rather than reimplementing the stableswap math locally, so a quote is only as current as the RPC response.
 - The Python analysis layer is separate from the Rust runtime so I can change reporting without touching the scanner itself.
 
 ## Known Limitations
