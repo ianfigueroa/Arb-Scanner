@@ -12,7 +12,7 @@ use tracing::{debug, error, info, warn};
 use crate::config::{arb_paths, pool_catalog, PoolCatalogEntry};
 use crate::types::{ArbPath, ChainId, DexType, PoolKey, PoolState};
 
-// ─── ABI fragments ────────────────────────────────────────────────────────────
+// abi fragments
 
 const PAIR_ABI: &str = r#"[
     {"inputs":[],"name":"token0","outputs":[{"internalType":"address","name":"","type":"address"}],"stateMutability":"view","type":"function"},
@@ -43,7 +43,7 @@ fn parse_curve_balances_abi() -> Abi {
 
 const FACTORY_ABI: &str = r#"[{"inputs":[{"internalType":"address","name":"tokenA","type":"address"},{"internalType":"address","name":"tokenB","type":"address"}],"name":"getPair","outputs":[{"internalType":"address","name":"pair","type":"address"}],"stateMutability":"view","type":"function"}]"#;
 
-// ─── PoolRegistry ─────────────────────────────────────────────────────────────
+// poolregistry
 
 #[derive(Clone)]
 pub struct PoolRegistry {
@@ -70,7 +70,7 @@ impl PoolRegistry {
     }
 }
 
-// ─── Factory resolution ───────────────────────────────────────────────────────
+// factory resolution
 
 /// Resolve pool addresses from the chain's factory contract and return the
 /// runtime catalog + arb paths with correct on-chain addresses.
@@ -150,7 +150,7 @@ async fn get_pair(
         .wrap_err_with(|| format!("getPair({token_a:?}, {token_b:?}) failed"))?;
     if pair == Address::zero() {
         return Err(eyre!(
-            "getPair({:?}, {:?}) returned zero address — pair does not exist",
+            "getPair({:?}, {:?}) returned zero address - pair does not exist",
             token_a,
             token_b
         ));
@@ -158,7 +158,7 @@ async fn get_pair(
     Ok(pair)
 }
 
-// ─── Startup: verify token ordering on-chain ─────────────────────────────────
+// startup: verify token ordering on-chain
 
 pub async fn verify_pool_tokens(
     provider: Arc<Provider<Ws>>,
@@ -218,7 +218,7 @@ pub async fn verify_pool_tokens(
     Ok(())
 }
 
-// ─── Startup: bootstrap reserves ─────────────────────────────────────────────
+// startup: bootstrap reserves
 
 pub async fn bootstrap_reserves(
     provider: Arc<Provider<Ws>>,
@@ -357,7 +357,7 @@ async fn fetch_curve_balance(
         .wrap_err("balances()")
 }
 
-// ─── Sync event subscriptions ─────────────────────────────────────────────────
+// sync event subscriptions
 
 /// Subscribes to Sync/Swap/TokenExchange events for all pools in the catalog.
 /// Returns on stream end or error. Caller wraps in a reconnect loop.
@@ -539,7 +539,7 @@ async fn handle_token_exchange_log(
     }
 }
 
-// ─── Stale reserve refresh ────────────────────────────────────────────────────
+// stale reserve refresh
 
 const STALE_BLOCK_THRESHOLD: u64 = 50;
 

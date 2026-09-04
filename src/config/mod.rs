@@ -60,7 +60,7 @@ pub fn weth_usdc_from_catalog(catalog: &[PoolCatalogEntry]) -> Option<(PoolKey, 
         })
 }
 
-// ─── Tests ────────────────────────────────────────────────────────────────────
+// tests
 
 #[cfg(test)]
 mod tests {

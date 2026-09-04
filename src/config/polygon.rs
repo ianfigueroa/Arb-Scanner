@@ -7,7 +7,7 @@ fn addr(s: &str) -> Address {
     s.parse().expect("invalid address in polygon config")
 }
 
-// ─── Token addresses ──────────────────────────────────────────────────────────
+// token addresses
 
 pub fn weth() -> Address {
     addr("0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619")
@@ -19,23 +19,23 @@ pub fn dai() -> Address {
     addr("0x8f3Cf7ad23Cd3CaDbD9735AFf958023239c6A063")
 }
 
-// ─── Pool keys ────────────────────────────────────────────────────────────────
+// pool keys
 
-/// QuickSwap V2 — WETH/USDC (token0=USDC, token1=WETH; 0x2791 < 0x7ceB)
+/// QuickSwap V2 - WETH/USDC (token0=USDC, token1=WETH; 0x2791 < 0x7ceB)
 pub fn pool_key_weth_usdc() -> PoolKey {
     PoolKey::new(
         ChainId::Polygon,
         addr("0x853Ee4b2A13f8a742d64C8F088bE7bA2131f670d"),
     )
 }
-/// QuickSwap V2 — USDC/DAI (token0=USDC, token1=DAI; 0x2791 < 0x8f3C)
+/// QuickSwap V2 - USDC/DAI (token0=USDC, token1=DAI; 0x2791 < 0x8f3C)
 pub fn pool_key_usdc_dai() -> PoolKey {
     PoolKey::new(
         ChainId::Polygon,
         addr("0xf04adBF75cDFc5eD26eeA4bbbb991DB002036Bdd"),
     )
 }
-/// QuickSwap V2 — WETH/DAI (token0=WETH, token1=DAI; 0x7ceB < 0x8f3C)
+/// QuickSwap V2 - WETH/DAI (token0=WETH, token1=DAI; 0x7ceB < 0x8f3C)
 pub fn pool_key_weth_dai() -> PoolKey {
     PoolKey::new(
         ChainId::Polygon,
@@ -49,12 +49,12 @@ pub fn weth_usdc_key() -> PoolKey {
     pool_key_weth_usdc()
 }
 
-/// QuickSwap V2 factory — used to resolve canonical pool addresses at runtime.
+/// QuickSwap V2 factory - used to resolve canonical pool addresses at runtime.
 pub fn factory() -> Address {
     addr("0x5757371414417b8C6CAad45bAeF941aBc7d3Ab32")
 }
 
-// ─── Runtime-resolved catalog + paths ────────────────────────────────────────
+// runtime-resolved catalog + paths
 
 /// Build the pool catalog from factory-resolved pool addresses.
 pub fn polygon_pools_from_pairs(
@@ -160,7 +160,7 @@ pub fn polygon_arb_paths_from_pairs(
     ]
 }
 
-// ─── Pool catalog ─────────────────────────────────────────────────────────────
+// pool catalog
 
 pub fn polygon_pools() -> Vec<PoolCatalogEntry> {
     vec![
@@ -200,7 +200,7 @@ pub fn polygon_pools() -> Vec<PoolCatalogEntry> {
     ]
 }
 
-// ─── Arb paths ────────────────────────────────────────────────────────────────
+// arb paths
 
 pub fn polygon_arb_paths() -> Vec<ArbPath> {
     vec![
@@ -257,7 +257,7 @@ pub fn polygon_arb_paths() -> Vec<ArbPath> {
     ]
 }
 
-// ─── Tests ────────────────────────────────────────────────────────────────────
+// tests
 
 #[cfg(test)]
 mod tests {

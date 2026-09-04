@@ -7,7 +7,7 @@ fn addr(s: &str) -> Address {
     s.parse().expect("invalid address in base config")
 }
 
-// ─── Token addresses ──────────────────────────────────────────────────────────
+// token addresses
 
 pub fn weth() -> Address {
     addr("0x4200000000000000000000000000000000000006")
@@ -19,23 +19,23 @@ pub fn dai() -> Address {
     addr("0x50c5725949A6F0c72E6C4a641F24049A917DB0Cb")
 }
 
-// ─── Pool keys ────────────────────────────────────────────────────────────────
+// pool keys
 
-/// BaseSwap V2 — WETH/USDC (token0=WETH, token1=USDC; 0x4200 < 0x8335)
+/// BaseSwap V2 - WETH/USDC (token0=WETH, token1=USDC; 0x4200 < 0x8335)
 pub fn pool_key_weth_usdc() -> PoolKey {
     PoolKey::new(
         ChainId::Base,
         addr("0xfDc1c9CBf7BD1Ac41d1A3C4b56E93c1d1437d2f7"),
     )
 }
-/// BaseSwap V2 — WETH/DAI (token0=WETH, token1=DAI; 0x4200 < 0x50c5)
+/// BaseSwap V2 - WETH/DAI (token0=WETH, token1=DAI; 0x4200 < 0x50c5)
 pub fn pool_key_weth_dai() -> PoolKey {
     PoolKey::new(
         ChainId::Base,
         addr("0x7B65E1AA7f45E17c91b7dbCe1d8B7bBA0D2cD4a8"),
     )
 }
-/// BaseSwap V2 — DAI/USDC (token0=DAI, token1=USDC; 0x50c5 < 0x8335)
+/// BaseSwap V2 - DAI/USDC (token0=DAI, token1=USDC; 0x50c5 < 0x8335)
 pub fn pool_key_dai_usdc() -> PoolKey {
     PoolKey::new(
         ChainId::Base,
@@ -49,12 +49,12 @@ pub fn weth_usdc_key() -> PoolKey {
     pool_key_weth_usdc()
 }
 
-/// BaseSwap V2 factory — used to resolve canonical pool addresses at runtime.
+/// BaseSwap V2 factory - used to resolve canonical pool addresses at runtime.
 pub fn factory() -> Address {
     addr("0xFDa619b6d20975be80A10332cD39b9a4b0FAa8BB")
 }
 
-// ─── Runtime-resolved catalog + paths ────────────────────────────────────────
+// runtime-resolved catalog + paths
 
 /// Build the pool catalog from factory-resolved pool addresses.
 pub fn base_pools_from_pairs(
@@ -160,7 +160,7 @@ pub fn base_arb_paths_from_pairs(
     ]
 }
 
-// ─── Pool catalog ─────────────────────────────────────────────────────────────
+// pool catalog
 
 pub fn base_pools() -> Vec<PoolCatalogEntry> {
     vec![
@@ -200,7 +200,7 @@ pub fn base_pools() -> Vec<PoolCatalogEntry> {
     ]
 }
 
-// ─── Arb paths ────────────────────────────────────────────────────────────────
+// arb paths
 
 pub fn base_arb_paths() -> Vec<ArbPath> {
     vec![
@@ -257,7 +257,7 @@ pub fn base_arb_paths() -> Vec<ArbPath> {
     ]
 }
 
-// ─── Tests ────────────────────────────────────────────────────────────────────
+// tests
 
 #[cfg(test)]
 mod tests {

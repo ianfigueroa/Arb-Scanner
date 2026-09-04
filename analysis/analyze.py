@@ -350,9 +350,9 @@ def print_profitability_summary(opps: pd.DataFrame) -> None:
 
     tiers = [
         ("< 0%", roi < 0),
-        ("0–0.1%", (roi >= 0) & (roi < 0.1)),
-        ("0.1–0.5%", (roi >= 0.1) & (roi < 0.5)),
-        ("0.5–1%", (roi >= 0.5) & (roi < 1.0)),
+        ("0-0.1%", (roi >= 0) & (roi < 0.1)),
+        ("0.1-0.5%", (roi >= 0.1) & (roi < 0.5)),
+        ("0.5-1%", (roi >= 0.5) & (roi < 1.0)),
         ("> 1%", roi >= 1.0),
     ]
     for label, mask in tiers:

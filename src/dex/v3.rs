@@ -7,7 +7,7 @@ use ethers::types::U256;
 /// - zero_for_one=true  (token1→token0): amountOut = amountIn / price * (1 - fee/1_000_000)
 ///
 /// Fee tiers: 100 (0.01%), 500 (0.05%), 3000 (0.3%), 10000 (1%)
-/// All arithmetic uses checked_* — returns None on any overflow or division by zero.
+/// All arithmetic uses checked_* - returns None on any overflow or division by zero.
 ///
 /// NOTE: This is a marginal-price approximation. Real V3 output accounts for
 /// price impact across the curve; this ignores that and is accurate only for
@@ -48,7 +48,7 @@ pub fn approx_out_v3(
 mod tests {
     use super::*;
 
-    // ── Helpers ───────────────────────────────────────────────────────────────
+    // helpers
 
     /// Build sqrtPriceX96 for an integer price (token1/token0 in raw units).
     /// price must be a perfect square for exact results.
@@ -57,7 +57,7 @@ mod tests {
         U256::from(sqrt_int) * (U256::one() << 96u32)
     }
 
-    // ── Basic correctness ─────────────────────────────────────────────────────
+    // basic correctness
 
     #[test]
     fn test_approx_out_v3_zero_for_one_false_no_fee() {
@@ -133,13 +133,13 @@ mod tests {
         let usdc = usdc_out.unwrap().low_u64();
         assert!(
             usdc > 2_500_000_000 && usdc < 3_500_000_000,
-            "usdc_out={usdc} should be in $2500–$3500 range (6dec)"
+            "usdc_out={usdc} should be in $2500-$3500 range (6dec)"
         );
     }
 
     #[test]
     fn test_approx_out_v3_overflow_guard() {
-        // Extreme sqrtPriceX96 — should not panic, return None on overflow
+        // Extreme sqrtPriceX96 - should not panic, return None on overflow
         let huge_sqrt = U256::MAX >> 1u32;
         let _ = approx_out_v3(U256::MAX, huge_sqrt, 500, false);
         let _ = approx_out_v3(U256::MAX, huge_sqrt, 500, true);

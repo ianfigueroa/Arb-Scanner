@@ -27,7 +27,7 @@ use pools::{
 };
 use types::{ChainId, PoolKey, PoolState, SessionInfo, SessionStats};
 
-// ─── Entry point ──────────────────────────────────────────────────────────────
+// entry point
 
 const DEFAULT_DB_PATH: &str = "arb_opportunities.db";
 
@@ -44,7 +44,7 @@ async fn main() -> Result<()> {
     let chains = collect_active_chains();
     if chains.is_empty() {
         warn!(
-            "no chain WS URLs configured — set ETH_WS_URL, ARBITRUM_WS_URL, \
+            "no chain WS URLs configured - set ETH_WS_URL, ARBITRUM_WS_URL, \
              BASE_WS_URL, or POLYGON_WS_URL"
         );
         return Ok(());
@@ -152,7 +152,7 @@ async fn main() -> Result<()> {
     println!("Runtime:              {:.1}s", elapsed.as_secs_f64());
     println!("======================");
 
-    // ── Phase 3: Research summary ──────────────────────────────────────────────
+    // phase 3: research summary
     let by_count = db
         .top_paths_by_count(Some(&session.id), 5)
         .unwrap_or_default();
@@ -187,7 +187,7 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-// ─── Chain discovery ──────────────────────────────────────────────────────────
+// chain discovery
 
 fn collect_active_chains() -> Vec<(ChainId, String)> {
     let vars = [
@@ -204,14 +204,14 @@ fn collect_active_chains() -> Vec<(ChainId, String)> {
                 result.push((*chain, url));
             }
             Err(_) => {
-                info!(chain = chain.name(), var, "no WS URL — chain skipped");
+                info!(chain = chain.name(), var, "no WS URL - chain skipped");
             }
         }
     }
     result
 }
 
-// ─── Per-chain task spawner ───────────────────────────────────────────────────
+// per-chain task spawner
 
 /// Bootstrap a chain and spawn its subscription, block, and arb tasks.
 /// Returns after spawning (tasks run independently in background).
@@ -537,7 +537,7 @@ fn resolve_database_path(raw: Option<String>) -> String {
         .unwrap_or_else(|| DEFAULT_DB_PATH.to_string())
 }
 
-// ─── Price helpers ────────────────────────────────────────────────────────────
+// price helpers
 
 /// Derive the WETH/USD price from the runtime-resolved catalog's WETH/USDC pool.
 fn chain_weth_usd_price(

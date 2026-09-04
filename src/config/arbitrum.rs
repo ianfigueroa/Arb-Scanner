@@ -7,7 +7,7 @@ fn addr(s: &str) -> Address {
     s.parse().expect("invalid address in arbitrum config")
 }
 
-// ─── Token addresses ──────────────────────────────────────────────────────────
+// token addresses
 
 pub fn weth() -> Address {
     addr("0x82aF49447D8a07e3bd95BD0d56f35241523fBab1")
@@ -16,9 +16,9 @@ pub fn usdc_e() -> Address {
     addr("0xFF970A61A04b1cA14834A43f5dE4533eBDDB5CC8")
 }
 
-// ─── Pool keys ────────────────────────────────────────────────────────────────
+// pool keys
 
-/// SushiSwap V2 — WETH/USDC.e (token0=WETH, token1=USDC.e; 0x82aF < 0xFF97)
+/// SushiSwap V2 - WETH/USDC.e (token0=WETH, token1=USDC.e; 0x82aF < 0xFF97)
 pub fn pool_key_weth_usdc_e() -> PoolKey {
     PoolKey::new(
         ChainId::Arbitrum,
@@ -32,9 +32,9 @@ pub fn weth_usdc_key() -> PoolKey {
     pool_key_weth_usdc_e()
 }
 
-// ─── Pool catalog ─────────────────────────────────────────────────────────────
+// pool catalog
 //
-// Only WETH/USDC.e is included — it is the only SushiSwap V2 pair on Arbitrum
+// Only WETH/USDC.e is included - it is the only SushiSwap V2 pair on Arbitrum
 // with a verified on-chain address. Additional pairs (USDT, etc.) had bad
 // addresses and were removed. Add them back once correct addresses are confirmed.
 pub fn arbitrum_pools() -> Vec<PoolCatalogEntry> {
@@ -51,16 +51,16 @@ pub fn arbitrum_pools() -> Vec<PoolCatalogEntry> {
     }]
 }
 
-// ─── Arb paths ────────────────────────────────────────────────────────────────
+// arb paths
 //
-// No triangular paths configured — triangular arb requires 3 pools minimum.
+// No triangular paths configured - triangular arb requires 3 pools minimum.
 // Arbitrum is used for price monitoring only (WETH/USDC.e cross-chain spread).
 
 pub fn arbitrum_arb_paths() -> Vec<ArbPath> {
     vec![]
 }
 
-// ─── Tests ────────────────────────────────────────────────────────────────────
+// tests
 
 #[cfg(test)]
 mod tests {

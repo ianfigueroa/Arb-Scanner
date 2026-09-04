@@ -6,7 +6,7 @@ use ethers::types::{Address, U256};
 
 use crate::types::{DexType, PoolState};
 
-// ─── Synchronous quote dispatch ───────────────────────────────────────────────
+// synchronous quote dispatch
 
 /// Compute an output quote for a single hop using pool state already in memory.
 ///
@@ -80,7 +80,7 @@ fn v3_dispatch(
     v3::approx_out_v3(amount_in, sqrt_price_x96, fee_tier, zero_for_one)
 }
 
-// ─── Tests ────────────────────────────────────────────────────────────────────
+// tests
 
 #[cfg(test)]
 mod tests {

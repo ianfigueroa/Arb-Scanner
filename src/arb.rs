@@ -14,12 +14,12 @@ pub const MAX_STALE_BLOCKS: u64 = 20;
 /// Gas units estimated for a 3-hop triangular arb.
 const GAS_UNITS: u64 = 150_000;
 
-// ─── Freshness guard ──────────────────────────────────────────────────────────
+// freshness guard
 
 /// Returns true if all pools referenced by the path exist and each pool's
 /// last_block is within MAX_STALE_BLOCKS of current_block.
 ///
-/// Missing an event does not mean stale data — it means no trade happened.
+/// Missing an event does not mean stale data - it means no trade happened.
 /// The correct check is individual pool age against the current chain head.
 fn path_is_fresh(pools: &HashMap<PoolKey, PoolState>, path: &ArbPath, current_block: u64) -> bool {
     for hop in &path.hops {
@@ -39,7 +39,7 @@ fn path_is_fresh(pools: &HashMap<PoolKey, PoolState>, path: &ArbPath, current_bl
     true
 }
 
-// ─── Path execution ───────────────────────────────────────────────────────────
+// path execution
 
 /// Execute an arb path hop-by-hop. Returns the output amount after all hops,
 /// or None if any hop fails or pools are stale.
@@ -60,7 +60,7 @@ pub(crate) fn execute_path(
     Some(amount)
 }
 
-// ─── Gas estimation ───────────────────────────────────────────────────────────
+// gas estimation
 
 /// Compute estimated_net_after_gas (signed wei) and gas_cost_usd.
 /// `weth_price_usd` is USDC per WETH (e.g. 3000.0).
@@ -105,7 +105,7 @@ pub fn apply_gas(
     }
 }
 
-// ─── Scan all opportunities ───────────────────────────────────────────────────
+// scan all opportunities
 
 /// Input sizes to scan: 0.1, 0.5, 1, 5, 10 ETH in wei
 const INPUT_SIZES_ETH: [u64; 5] = [
@@ -144,7 +144,7 @@ pub fn scan_all_opportunities(
     opps
 }
 
-// ─── Helpers ──────────────────────────────────────────────────────────────────
+// helpers
 
 fn u256_to_i128_lossy(v: U256) -> i128 {
     // Clamp to i128::MAX before casting; values this large indicate an overflow
@@ -158,7 +158,7 @@ pub fn u256_to_f64(v: U256) -> f64 {
     hi.low_u64() as f64 * u64::MAX as f64 + lo.low_u64() as f64
 }
 
-// ─── Tests ────────────────────────────────────────────────────────────────────
+// tests
 
 #[cfg(test)]
 mod tests {
@@ -167,7 +167,7 @@ mod tests {
     use crate::types::{DexType, HopSpec};
     use ethers::types::Address;
 
-    // ── Test fixtures ─────────────────────────────────────────────────────────
+    // test fixtures
 
     fn test_addr(n: u8) -> Address {
         let mut bytes = [0u8; 20];
@@ -299,7 +299,7 @@ mod tests {
         U256::from(n) * U256::exp10(18)
     }
 
-    // ── amm_out ───────────────────────────────────────────────────────────────
+    // amm_out
 
     #[test]
     fn test_amm_out_basic() {
@@ -338,15 +338,15 @@ mod tests {
 
     #[test]
     fn test_amm_out_overflow_guard() {
-        // Very large U256 values — should not panic, just return None due to overflow
+        // Very large U256 values - should not panic, just return None due to overflow
         let huge = U256::MAX;
         // checked_mul(997) on U256::MAX will overflow → None
         let result = amm_out(huge, huge, huge);
-        // Either None (overflow) or Some — just must not panic
+        // Either None (overflow) or Some - just must not panic
         let _ = result;
     }
 
-    // ── PoolState::last_block ─────────────────────────────────────────────────
+    // poolstate::last_block
 
     #[test]
     fn test_pool_state_last_block_v2() {
@@ -372,7 +372,7 @@ mod tests {
         assert_eq!(state.last_block(), 99);
     }
 
-    // ── PoolKey ───────────────────────────────────────────────────────────────
+    // poolkey
 
     #[test]
     fn test_pool_key_equality_and_hash() {
@@ -388,7 +388,7 @@ mod tests {
         assert!(!m.contains_key(&k3));
     }
 
-    // ── Freshness guard ───────────────────────────────────────────────────────
+    // freshness guard
 
     #[test]
     fn test_freshness_guard_passes_when_fresh() {
@@ -433,7 +433,7 @@ mod tests {
                 last_block: 100,
             },
         );
-        // ud_key and dw_key missing — path has 3 hops but only 1 pool
+        // ud_key and dw_key missing - path has 3 hops but only 1 pool
         assert!(!path_is_fresh(&pools, &forward_path(), 100));
     }
 
@@ -452,7 +452,7 @@ mod tests {
         assert!(execute_path(&pools, &forward_path(), eth(1), 105).is_none());
     }
 
-    // ── Path direction ────────────────────────────────────────────────────────
+    // path direction
 
     #[test]
     fn test_forward_path_differs_from_reverse() {
@@ -480,7 +480,7 @@ mod tests {
         assert_ne!(fwd, rev, "forward and reverse should differ");
     }
 
-    // ── Decimal chain ─────────────────────────────────────────────────────────
+    // decimal chain
 
     #[test]
     fn test_decimal_chain_usdc_intermediate() {
@@ -517,7 +517,7 @@ mod tests {
         );
     }
 
-    // ── Fixture snapshot ──────────────────────────────────────────────────────
+    // fixture snapshot
 
     #[test]
     fn test_fixture_snapshot() {

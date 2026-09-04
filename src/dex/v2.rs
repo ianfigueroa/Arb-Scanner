@@ -1,7 +1,7 @@
 use ethers::types::U256;
 
 /// Uniswap V2 constant-product output with 0.3% fee.
-/// Uses raw token units — no decimal normalization needed across hops.
+/// Uses raw token units - no decimal normalization needed across hops.
 pub fn amm_out(amount_in: U256, reserve_in: U256, reserve_out: U256) -> Option<U256> {
     if reserve_in.is_zero() || reserve_out.is_zero() || amount_in.is_zero() {
         return None;

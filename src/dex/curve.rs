@@ -7,7 +7,7 @@ use ethers::contract::Contract;
 use ethers::providers::{Provider, Ws};
 use ethers::types::{Address, I256, U256};
 
-// ─── ABI fragment ─────────────────────────────────────────────────────────────
+// abi fragment
 
 const CURVE_ABI: &str = r#"[
     {
@@ -27,14 +27,14 @@ fn parse_curve_abi() -> Abi {
     serde_json::from_str(CURVE_ABI).expect("hardcoded Curve ABI is valid JSON")
 }
 
-// ─── Validation ───────────────────────────────────────────────────────────────
+// validation
 
 /// Returns true if the parameters are valid for a Curve get_dy call.
 fn validate_curve_params(i: i128, j: i128, dx: U256) -> bool {
     !dx.is_zero() && i >= 0 && j >= 0 && i != j
 }
 
-// ─── Quote ────────────────────────────────────────────────────────────────────
+// quote
 
 /// Query a Curve pool's `get_dy(i, j, dx)` for an estimated output amount.
 ///
@@ -62,7 +62,7 @@ pub async fn curve_quote(
         .ok()
 }
 
-// ─── Tests ────────────────────────────────────────────────────────────────────
+// tests
 
 #[cfg(test)]
 mod tests {

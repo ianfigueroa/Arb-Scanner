@@ -6,11 +6,11 @@ use tracing::warn;
 
 use crate::types::ChainId;
 
-// ─── Types ────────────────────────────────────────────────────────────────────
+// types
 
 pub type PriceRef = Arc<RwLock<Option<f64>>>;
 
-// ─── Spread calculation ───────────────────────────────────────────────────────
+// spread calculation
 
 /// Returns the percentage spread between the highest and lowest price.
 /// `(max - min) / min * 100.0`
@@ -30,7 +30,7 @@ pub fn compute_spread_pct(prices: &[(ChainId, f64)]) -> Option<f64> {
     Some((max - min) / min * 100.0)
 }
 
-// ─── Monitor task ─────────────────────────────────────────────────────────────
+// monitor task
 
 /// Periodically reads WETH/USD prices from all active chains and logs an alert
 /// when the spread between the highest and lowest price exceeds `threshold_pct`.
@@ -66,7 +66,7 @@ pub async fn cross_chain_monitor(price_refs: Vec<(ChainId, PriceRef)>, threshold
     }
 }
 
-// ─── Tests ────────────────────────────────────────────────────────────────────
+// tests
 
 #[cfg(test)]
 mod tests {
@@ -101,7 +101,7 @@ mod tests {
     fn test_spread_alert_fires_above_threshold() {
         let prices = vec![(ChainId::Ethereum, 3000.0), (ChainId::Arbitrum, 3012.0)];
         let spread = compute_spread_pct(&prices).unwrap();
-        // threshold 0.1% — spread 0.4% should exceed it
+        // threshold 0.1% - spread 0.4% should exceed it
         assert!(spread > 0.1);
     }
 
